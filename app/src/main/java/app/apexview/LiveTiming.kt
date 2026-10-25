@@ -577,7 +577,12 @@ class LiveTimingArchive(private val token: String, private val userAgent: String
                 val d = lines.optJSONObject(number) ?: return@forEach
                 var state = current[number] ?: LapState.UNKNOWN
                 if (d.optBoolean("InPit")) state = LapState.PIT
-                if (d.optBoolean("PitOut")) state = LapState.OUT_LAP
+                // Leaving the pits: F1 sends PitOut, but before a race the last run to the grid
+                // can end with just InPit going false. Either way the car is out; without the
+                // second case, cars that hadn't stopped yet stayed "in the pits" (dimmed) all race.
+                if (d.optBoolean("PitOut") || (d.has("InPit") && !d.optBoolean("InPit") && state == LapState.PIT)) {
+                    state = LapState.OUT_LAP
+                }
                 if (d.has("NumberOfLaps")) {
                     val n = d.optInt("NumberOfLaps")
                     val before = laps[number]

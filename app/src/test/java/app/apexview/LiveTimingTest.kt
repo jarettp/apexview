@@ -22,6 +22,17 @@ class LiveTimingTest {
     private val archive = LiveTimingArchive("token", "test")
     private val t0 = Instant.parse("2026-10-24T20:00:00Z").toEpochMilli()
 
+    @Test
+    fun leavingThePitsWithoutPitOutStillCountsAsOut() {
+        val stream = listOf(
+            "00:00:01.000{\"Lines\":{\"4\":{\"InPit\":true,\"NumberOfLaps\":0}}}",
+            "00:05:00.000{\"Lines\":{\"4\":{\"InPit\":false}}}",
+        ).joinToString("\n")
+        val states = archive.parseStates(stream, t0).states.getValue("4")
+        assertEquals(LapState.PIT, states.at(t0 + 60_000))
+        assertEquals(LapState.OUT_LAP, states.at(t0 + 400_000))
+    }
+
     private fun stamp(offsetMs: Long): String {
         val s = offsetMs / 1000
         return "%02d:%02d:%02d.%03d".format(s / 3600, s / 60 % 60, s % 60, offsetMs % 1000)
