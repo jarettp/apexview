@@ -222,7 +222,8 @@ fun ViewerScreen(app: AppState) {
     // The controls and the feeds move together: one curve, one duration. While arranging the
     // feeds stay full size, so what you place is where it ends up.
     val motion = tween<Float>(Motion.SCREEN_MS, easing = EaseOut)
-    val lift by animateFloatAsState(if (app.chromeVisible && !app.arranging) 1f else 0f, motion, label = "lift")
+    // Laptop mode keeps the stream still: the controls lie over its top edge instead.
+    val lift by animateFloatAsState(if (app.chromeVisible && !app.arranging && !app.laptopActive) 1f else 0f, motion, label = "lift")
 
     BoxWithConstraints(
         Modifier
@@ -255,6 +256,17 @@ fun ViewerScreen(app: AppState) {
                 key(tile.id) { TileView(app, tile) }
             }
 
+            // Laptop mode: the half below the hinge is the timing tower and the map.
+            val hinge = app.hinge
+            if (app.laptopActive && hinge != null) {
+                LaptopPanel(
+                    app, app.timing,
+                    Modifier
+                        .offset { IntOffset(0, hinge.second.roundToInt()) }
+                        .requiredSize(with(density) { width.toDp() }, with(density) { (height - hinge.second).coerceAtLeast(0f).toDp() })
+                        .zIndex(1e9f),
+                )
+            } else
             // Above every tile (their z grows by one per touch), below the controls.
             app.timing?.let { timing ->
                 when (app.mapMode) {
@@ -304,6 +316,7 @@ fun ViewerScreen(app: AppState) {
     app.tileMenu?.let { TileMenuSheet(app, it) }
     if (app.mapSheetOpen) MapSheet(app)
     if (app.layoutSheetOpen) LayoutSheet(app)
+    LaptopPrompt(app)
 }
 
 /**
@@ -835,6 +848,15 @@ private fun LayoutSheet(app: AppState) {
             }
             Text(
                 "Every stream with $n feed${if (n == 1) "" else "s"} will start like this, the map included. Main + strip and Grid stay as they are.",
+                style = Type.footnote,
+                modifier = Modifier.padding(top = 8.dp),
+            )
+
+            Column(Modifier.padding(top = 20.dp).clip(RoundedCornerShape(12.dp)).background(Ink.background).padding(vertical = 4.dp)) {
+                SwitchRow("Laptop mode when half-folded", app.laptopEnabled, app::chooseLaptop)
+            }
+            Text(
+                "Open the phone partway, like a laptop, and the stream takes the top half while the timing tower and track map fill the bottom.",
                 style = Type.footnote,
                 modifier = Modifier.padding(top = 8.dp),
             )

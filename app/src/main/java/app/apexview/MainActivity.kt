@@ -42,6 +42,8 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.ui.PlayerView
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     private lateinit var app: AppState
@@ -60,6 +62,20 @@ class MainActivity : ComponentActivity() {
         setContent { AppTheme { Root(app) } }
         app.restore()
         app.updater.checkIfDue()
+        // The fold's posture: half-open with the hinge running across the screen is laptop mode.
+        lifecycleScope.launch {
+            repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.STARTED) {
+                androidx.window.layout.WindowInfoTracker.getOrCreate(this@MainActivity)
+                    .windowLayoutInfo(this@MainActivity)
+                    .collect { info ->
+                        val fold = info.displayFeatures.filterIsInstance<androidx.window.layout.FoldingFeature>().firstOrNull {
+                            it.state == androidx.window.layout.FoldingFeature.State.HALF_OPENED &&
+                                it.orientation == androidx.window.layout.FoldingFeature.Orientation.HORIZONTAL
+                        }
+                        app.updatePosture(fold?.bounds?.let { it.top.toFloat() to it.bottom.toFloat() })
+                    }
+            }
+        }
         addOnPictureInPictureModeChangedListener { app.setPip(it.isInPictureInPictureMode) }
         ContextCompat.registerReceiver(
             this, pipControls,

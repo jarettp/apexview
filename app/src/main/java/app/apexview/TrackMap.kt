@@ -237,6 +237,14 @@ fun MapPanelView(app: AppState, timing: SessionTiming) {
     }
 }
 
+/** The track map filling whatever box it's given (laptop mode's lower half). */
+@Composable
+fun TrackMapFill(app: AppState, timing: SessionTiming) {
+    androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxSize()) {
+        TrackDrawing(app, timing, constraints.maxWidth.toFloat(), constraints.maxHeight.toFloat(), 0f)
+    }
+}
+
 /** Lock, move grip and resize handle, at the corners of the drawn track. */
 @Composable
 private fun MapControls(app: AppState, timing: SessionTiming) {

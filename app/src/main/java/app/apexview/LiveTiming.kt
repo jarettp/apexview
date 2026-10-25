@@ -189,6 +189,8 @@ class SessionTiming(
     val laps: Map<String, DriverLaps> = emptyMap(),
     /** Team radio clips, oldest first. */
     val radio: List<RadioClip> = emptyList(),
+    /** Each driver's tyres, for the timing tower. */
+    val tyres: Map<String, TyreLog> = emptyMap(),
     /** Where the session's files live; a clip's address is this plus its path. Public, no login. */
     val radioBase: String = "",
 ) {
@@ -240,6 +242,7 @@ class LiveTimingArchive(private val token: String, private val userAgent: String
 
         val started = runCatching { parseSessionStarted(fetch(path + "SessionStatus.jsonStream"), streamStart) }.getOrNull()
         val chequered = runCatching { parseChequered(fetch(path + "RaceControlMessages.jsonStream"), streamStart) }.getOrNull()
+        val tyres = runCatching { TyreParser.parse(fetch(path + "TimingAppData.jsonStream"), streamStart) }.getOrDefault(emptyMap())
         val radio = runCatching { parseRadio(fetch(path + "TeamRadio.jsonStream")) }
             .onSuccess { android.util.Log.i("ApexviewRadio", "archive radio for $path: ${it.size} clips") }
             .onFailure { android.util.Log.w("ApexviewRadio", "archive radio for $path: ${it.message}") }
@@ -262,6 +265,7 @@ class LiveTimingArchive(private val token: String, private val userAgent: String
             laps = laps,
             radio = radio,
             radioBase = BASE + path,
+            tyres = tyres,
         ).also { it.startLine = grid?.startLine }
     }
 

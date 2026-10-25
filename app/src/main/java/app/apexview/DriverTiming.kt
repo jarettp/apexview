@@ -21,6 +21,10 @@ class CardState(
     /** Gap to the fastest in qualifying, else the interval to the car ahead. */
     val gap: String?,
     val inPit: Boolean,
+    /** Gap to the leader (races) or to the fastest lap (qualifying), for the timing tower. */
+    val toLeader: String? = null,
+    /** Gap to the car ahead, for the timing tower. */
+    val ahead: String? = null,
 )
 
 /**
@@ -43,6 +47,8 @@ class DriverLaps(
         val lastLap: SectorCell?,
         val gap: String?,
         val inPit: Boolean,
+        val toLeader: String?,
+        val ahead: String?,
     )
 
     /**
@@ -74,6 +80,8 @@ class DriverLaps(
             lastLap = s.lastLap,
             gap = s.gap,
             inPit = s.inPit,
+            toLeader = s.toLeader,
+            ahead = s.ahead,
         )
     }
 }
@@ -99,6 +107,8 @@ object DriverTimingParser {
         var lastLapValue = ""
         val lastLapFlags = BooleanArray(2)
         var gap: String? = null
+        var toLeader: String? = null
+        var ahead: String? = null
         var inPit = false
         var laps: Int? = null
         val times = ArrayList<Long>()
@@ -108,7 +118,7 @@ object DriverTimingParser {
         val lapCounts = ArrayList<Int>()
 
         fun snap(t: Long) {
-            val copy = DriverLaps.Snapshot(position, sector.toList(), lapSectors.toList(), lastLap, gap, inPit)
+            val copy = DriverLaps.Snapshot(position, sector.toList(), lapSectors.toList(), lastLap, gap, inPit, toLeader, ahead)
             if (times.isNotEmpty() && times.last() == t) {
                 snaps[snaps.lastIndex] = copy
             } else {
@@ -143,6 +153,11 @@ object DriverTimingParser {
         d.optJSONObject("IntervalToPositionAhead")?.let { o ->
             if (o.has("Value")) l.gap = o.optString("Value").ifEmpty { null }
         }
+        // For the tower: both gaps, under whichever names this session uses.
+        if (d.has("GapToLeader")) l.toLeader = d.optString("GapToLeader").ifEmpty { null }
+        if (d.has("TimeDiffToFastest")) l.toLeader = d.optString("TimeDiffToFastest").ifEmpty { null }
+        d.optJSONObject("IntervalToPositionAhead")?.let { o -> if (o.has("Value")) l.ahead = o.optString("Value").ifEmpty { null } }
+        if (d.has("TimeDiffToPositionAhead")) l.ahead = d.optString("TimeDiffToPositionAhead").ifEmpty { null }
 
         when (val sectors = d.opt("Sectors")) {
             is JSONArray -> for (i in 0 until minOf(3, sectors.length())) sectors.optJSONObject(i)?.let { applySector(l, i, it, t) }
@@ -203,6 +218,62 @@ object DriverTimingParser {
         flags[1] -> Pace.PURPLE
         flags[0] -> Pace.GREEN
         else -> Pace.YELLOW
+    }
+
+    private fun offsetMs(line: String): Long {
+        val h = line.substring(0, 2).toLong()
+        val m = line.substring(3, 5).toLong()
+        val s = line.substring(6, 8).toLong()
+        val ms = line.substring(9, 12).toLong()
+        return ((h * 60 + m) * 60 + s) * 1000 + ms
+    }
+}
+
+/** A tyre: its compound (SOFT, MEDIUM, HARD, INTERMEDIATE, WET) and laps done on it. */
+class Tyre(val compound: String, val laps: Int)
+
+/** One driver's tyres through the session. */
+class TyreLog(private val times: LongArray, private val tyres: List<Tyre>) {
+    fun at(utcMs: Long): Tyre? {
+        val i = times.indexOfLast { it <= utcMs }
+        return if (i < 0) null else tyres[i]
+    }
+}
+
+/**
+ * Reads F1's TimingAppData stream: per driver, a list of stints (as a list in the first line,
+ * then index-keyed updates). The current tyre is the last stint's compound and its lap count.
+ */
+object TyreParser {
+    private const val TS = 12
+
+    fun parse(stream: String, streamStart: Long): Map<String, TyreLog> {
+        val stints = mutableMapOf<String, MutableMap<Int, Pair<String, Int>>>()
+        val times = mutableMapOf<String, MutableList<Long>>()
+        val tyres = mutableMapOf<String, MutableList<Tyre>>()
+        stream.lineSequence().forEach { line ->
+            if (line.length <= TS) return@forEach
+            val lines = runCatching { org.json.JSONObject(line.substring(TS)).optJSONObject("Lines") }.getOrNull() ?: return@forEach
+            val t = streamStart + offsetMs(line)
+            lines.keys().forEach { number ->
+                val d = lines.optJSONObject(number) ?: return@forEach
+                val list = stints.getOrPut(number) { mutableMapOf() }
+                val entries: List<Pair<Int, org.json.JSONObject>> = when (val s = d.opt("Stints")) {
+                    is org.json.JSONArray -> (0 until s.length()).mapNotNull { i -> s.optJSONObject(i)?.let { i to it } }
+                    is org.json.JSONObject -> s.keys().asSequence().mapNotNull { k -> k.toIntOrNull()?.let { i -> s.optJSONObject(k)?.let { i to it } } }.toList()
+                    else -> return@forEach
+                }
+                entries.forEach { (i, o) ->
+                    val (compound, laps) = list[i] ?: ("" to 0)
+                    list[i] = o.optString("Compound").ifEmpty { compound } to (if (o.has("TotalLaps")) o.optInt("TotalLaps") else laps)
+                }
+                val current = list.maxByOrNull { it.key }?.value ?: return@forEach
+                if (current.first.isEmpty()) return@forEach
+                times.getOrPut(number) { mutableListOf() } += t
+                tyres.getOrPut(number) { mutableListOf() } += Tyre(current.first, current.second)
+            }
+        }
+        return times.mapValues { (n, ts) -> TyreLog(ts.toLongArray(), tyres.getValue(n)) }
     }
 
     private fun offsetMs(line: String): Long {

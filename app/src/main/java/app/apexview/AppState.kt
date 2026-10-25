@@ -931,10 +931,21 @@ class AppState(
             return
         }
         tiles.firstOrNull { it.channel == channel }?.let {
-            raise(it)
+            if (laptopActive) putOnTop(it) else raise(it)
             return
         }
         val now = mapTimeMs() ?: 0L
+        // Laptop mode shows one feed: the onboard takes a feed waiting off screen (never the one
+        // with the commentary) and comes up top; with only one feed, that one switches.
+        if (laptopActive) {
+            val spare = tiles.filter { it.id != bigTileId && !it.audible && !it.pinned }
+                .minWithOrNull(compareBy<Tile>({ interest(it, now) }, { it.mapPickedAt }))
+            val swap = spare ?: tiles.firstOrNull { it.id == bigTileId } ?: return
+            swap.mapPickedAt = System.currentTimeMillis()
+            switchFeed(swap, channel)
+            putOnTop(swap)
+            return
+        }
         val target = targetTile?.takeIf { it in tiles }
             ?: tiles
                 .filter { !it.audible && !it.pinned && !isMainTile(it) }
@@ -1046,6 +1057,16 @@ class AppState(
         layoutDone = layoutRequest
         val ordered = bigFirst()
         bigTileId = ordered.firstOrNull()?.id
+
+        // Laptop mode: the main feed fills the screen above the hinge; the rest wait off screen,
+        // still playing. Timing and the map take the half below.
+        hinge?.takeIf { laptopActive }?.let { (top, _) ->
+            val main = ordered.first()
+            main.place(Layouts.place(LayoutMode.GRID, 1, width, top).first())
+            raise(main)
+            tiles.filter { it !== main }.forEach { it.place(Slot(width * 2, 0f, it.w)) }
+            return
+        }
 
         // One feed filling the screen: it gets the whole canvas, the rest wait off screen.
         // Unfolding to the big screen ends it.
@@ -1408,7 +1429,7 @@ class AppState(
     /** Pulls tiles back so each one is at least partly on screen. */
     fun keepOnScreen(width: Float, height: Float) {
         // Feeds tucked away behind a full-screen one stay tucked away.
-        tiles.filter { focusTileId == null || it.id == focusTileId }.forEach { tile ->
+        tiles.filter { if (laptopActive) it.id == bigTileId else focusTileId == null || it.id == focusTileId }.forEach { tile ->
             if (tile.w > width) tile.resize(width)
             tile.x = tile.x.coerceIn(-tile.w / 2, width - tile.w / 2)
             tile.y = tile.y.coerceIn(0f, height - tile.h / 2)
@@ -1457,6 +1478,52 @@ class AppState(
             }
             else -> swapIntoBig(tile)
         }
+    }
+
+    // Laptop mode: the phone half-open with the hinge across, the stream above it and timing below.
+
+    /** Where the hinge runs across the screen (top, bottom), while half-open like a laptop. */
+    var hinge by mutableStateOf<Pair<Float, Float>?>(null)
+        private set
+    /** Laptop mode is wanted when the phone is in that position. Off until asked. */
+    var laptopEnabled by mutableStateOf(prefs.getBoolean(PREF_LAPTOP, false))
+        private set
+    /** The one-time question, showing. */
+    var laptopPromptOpen by mutableStateOf(false)
+        private set
+
+    /** Laptop mode is on screen now. */
+    val laptopActive get() = laptopEnabled && hinge != null && tiles.isNotEmpty()
+
+    /** From the activity: the fold's posture changed. */
+    fun updatePosture(newHinge: Pair<Float, Float>?) {
+        val was = laptopActive
+        hinge = newHinge
+        // The first time the phone is held like a laptop while watching, ask.
+        if (newHinge != null && tiles.isNotEmpty() && !prefs.getBoolean(PREF_LAPTOP_ASKED, false)) laptopPromptOpen = true
+        if (laptopActive != was) layoutRequest++
+    }
+
+    fun answerLaptopPrompt(use: Boolean) {
+        laptopPromptOpen = false
+        prefs.edit().putBoolean(PREF_LAPTOP_ASKED, true).apply()
+        chooseLaptop(use)
+    }
+
+    fun chooseLaptop(on: Boolean) {
+        val was = laptopActive
+        laptopEnabled = on
+        prefs.edit().putBoolean(PREF_LAPTOP, on).apply()
+        if (laptopActive != was) layoutRequest++
+    }
+
+    /** The feed in the big spot (up top in laptop mode), for highlighting it elsewhere. */
+    val bigTileIdForUi get() = bigTileId
+
+    /** In laptop mode, puts [tile] in the one spot above the hinge. */
+    private fun putOnTop(tile: Tile) {
+        bigTileId = tile.id
+        layoutRequest++
     }
 
     /** The feed filling a narrow screen after a double-tap, if any. */
@@ -1695,6 +1762,8 @@ class AppState(
         private const val NUDGE = 0.1f
         const val MAX_FEEDS = 4
         private const val MAX_RECENTS = 4
+        private const val PREF_LAPTOP = "laptopMode"
+        private const val PREF_LAPTOP_ASKED = "laptopAsked"
         private const val COMPACT_DP = 600f
         private const val PREF_RADIO = "radioOpen"
         private const val PREF_HELP_SEEN = "helpSeen"
