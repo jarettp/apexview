@@ -1,0 +1,17 @@
+.gradle/
+build/
+/local.properties
+/.idea/
+*.iml
+.DS_Store
+/captures
+.externalNativeBuild/
+.cxx/
+dist/
+keystore.properties
+.kotlin/
+# Signing keys and their passwords never go in the repository.
+*.jks
+*.keystore
+# Personal development notes.
+BACKLOG.md

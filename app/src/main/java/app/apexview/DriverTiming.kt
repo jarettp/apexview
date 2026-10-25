@@ -1,0 +1,215 @@
+package app.apexview
+
+import org.json.JSONArray
+import org.json.JSONObject
+
+/** How a sector or lap compares: the broadcast's yellow, green and purple. */
+enum class Pace { NONE, YELLOW, GREEN, PURPLE }
+
+class SectorCell(val time: String, val pace: Pace)
+
+/** What a driver's timing card shows at one moment. */
+class CardState(
+    val position: Int?,
+    /** S1..S3 of the lap in progress; null where not yet set. */
+    val sectors: List<SectorCell?>,
+    /** S1..S3 of the last full lap, shown with its lap time just after the line. */
+    val lapSectors: List<SectorCell?>,
+    /** Time into the current lap, ms; null in the pits or before the first crossing. */
+    val runningMs: Long?,
+    val lastLap: SectorCell?,
+    /** Gap to the fastest in qualifying, else the interval to the car ahead. */
+    val gap: String?,
+    val inPit: Boolean,
+)
+
+/**
+ * One driver's timing through the session, as recorded snapshots: each change to the sectors,
+ * last lap, gap, position or pit status keeps a full copy of the state, so [at] is a lookup
+ * rather than a replay.
+ */
+class DriverLaps(
+    private val times: LongArray,
+    private val states: List<Snapshot>,
+    private val crossings: LongArray,
+    /** When the driver's completed-lap count changed, and to what (F1's NumberOfLaps). */
+    private val lapTimes: LongArray = LongArray(0),
+    private val lapCounts: IntArray = IntArray(0),
+) {
+    class Snapshot(
+        val position: Int?,
+        val sectors: List<SectorCell?>,
+        val lapSectors: List<SectorCell?>,
+        val lastLap: SectorCell?,
+        val gap: String?,
+        val inPit: Boolean,
+    )
+
+    /**
+     * The lap the driver was on at [utcMs]: one more than F1's count of laps completed then.
+     * Null before the first count received (a live feed joined mid-session knows nothing
+     * earlier). Counting crossings instead started every live session at lap 1.
+     */
+    fun lapAt(utcMs: Long): Int? {
+        val i = lapTimes.indexOfLast { it <= utcMs }
+        return if (i < 0) null else lapCounts[i] + 1
+    }
+
+    fun at(utcMs: Long): CardState? {
+        var i = -1
+        var lo = 0
+        var hi = times.size - 1
+        while (lo <= hi) {
+            val mid = (lo + hi) ushr 1
+            if (times[mid] <= utcMs) { i = mid; lo = mid + 1 } else hi = mid - 1
+        }
+        if (i < 0) return null
+        val s = states[i]
+        val lapStart = crossings.lastOrNull { it <= utcMs }
+        return CardState(
+            position = s.position,
+            sectors = s.sectors,
+            lapSectors = s.lapSectors,
+            runningMs = if (s.inPit || lapStart == null) null else utcMs - lapStart,
+            lastLap = s.lastLap,
+            gap = s.gap,
+            inPit = s.inPit,
+        )
+    }
+}
+
+/**
+ * Builds every driver's [DriverLaps] from F1's TimingData stream. Lines are "HH:MM:SS.mmm" +
+ * JSON; the first is a full snapshot, the rest are partial updates under Lines.<number>. Sectors
+ * come as a list in the snapshot and as an index-keyed object in updates; a sector's Value goes
+ * empty when a new lap starts.
+ */
+object DriverTimingParser {
+    private const val TS = 12
+    private const val LATE_SECTOR_MS = 3_000L
+
+    private class Live {
+        var position: Int? = null
+        val sector = arrayOfNulls<SectorCell>(3)
+        val sectorFlags = Array(3) { BooleanArray(2) }   // personal, overall
+        val sectorValue = Array(3) { "" }
+        val lapSectors = arrayOfNulls<SectorCell>(3)
+        var crossedAt: Long? = null
+        var lastLap: SectorCell? = null
+        var lastLapValue = ""
+        val lastLapFlags = BooleanArray(2)
+        var gap: String? = null
+        var inPit = false
+        var laps: Int? = null
+        val times = ArrayList<Long>()
+        val snaps = ArrayList<DriverLaps.Snapshot>()
+        val crossings = ArrayList<Long>()
+        val lapTimes = ArrayList<Long>()
+        val lapCounts = ArrayList<Int>()
+
+        fun snap(t: Long) {
+            val copy = DriverLaps.Snapshot(position, sector.toList(), lapSectors.toList(), lastLap, gap, inPit)
+            if (times.isNotEmpty() && times.last() == t) {
+                snaps[snaps.lastIndex] = copy
+            } else {
+                times += t
+                snaps += copy
+            }
+        }
+    }
+
+    fun parse(stream: String, streamStart: Long): Map<String, DriverLaps> {
+        val drivers = mutableMapOf<String, Live>()
+        stream.lineSequence().forEach { line ->
+            if (line.length <= TS) return@forEach
+            val lines = runCatching { JSONObject(line.substring(TS)).optJSONObject("Lines") }.getOrNull() ?: return@forEach
+            val t = streamStart + offsetMs(line)
+            lines.keys().forEach { number ->
+                val d = lines.optJSONObject(number) ?: return@forEach
+                val live = drivers.getOrPut(number) { Live() }
+                apply(live, d, t)
+                live.snap(t)
+            }
+        }
+        return drivers.mapValues { (_, l) -> DriverLaps(l.times.toLongArray(), l.snaps, l.crossings.toLongArray(), l.lapTimes.toLongArray(), l.lapCounts.toIntArray()) }
+    }
+
+    private fun apply(l: Live, d: JSONObject, t: Long) {
+        d.optString("Position").toIntOrNull()?.let { l.position = it }
+        if (d.has("InPit")) l.inPit = d.optBoolean("InPit")
+        if (d.optBoolean("PitOut")) l.inPit = false
+        // Qualifying gives the gap to the fastest; races the interval to the car ahead.
+        d.optString("TimeDiffToFastest").takeIf { d.has("TimeDiffToFastest") }?.let { l.gap = it.ifEmpty { null } }
+        d.optJSONObject("IntervalToPositionAhead")?.let { o ->
+            if (o.has("Value")) l.gap = o.optString("Value").ifEmpty { null }
+        }
+
+        when (val sectors = d.opt("Sectors")) {
+            is JSONArray -> for (i in 0 until minOf(3, sectors.length())) sectors.optJSONObject(i)?.let { applySector(l, i, it, t) }
+            is JSONObject -> sectors.keys().forEach { k ->
+                val i = k.toIntOrNull() ?: return@forEach
+                if (i in 0..2) sectors.optJSONObject(k)?.let { applySector(l, i, it, t) }
+            }
+        }
+        d.optJSONObject("LastLapTime")?.let { o ->
+            if (o.has("Value")) l.lastLapValue = o.optString("Value")
+            if (o.has("PersonalFastest")) l.lastLapFlags[0] = o.optBoolean("PersonalFastest")
+            if (o.has("OverallFastest")) l.lastLapFlags[1] = o.optBoolean("OverallFastest")
+            l.lastLap = l.lastLapValue.takeIf { it.isNotEmpty() }?.let { SectorCell(it, pace(l.lastLapFlags)) }
+        }
+        // After the sectors, so a final sector sent with the crossing still counts for the lap
+        // it finished. F1 leaves the old sectors up well into the next lap; the card doesn't.
+        if (d.has("NumberOfLaps")) {
+            val n = d.optInt("NumberOfLaps")
+            if (l.laps != null && n > l.laps!!) {
+                l.crossings += t
+                l.crossedAt = t
+                l.sector.copyInto(l.lapSectors)
+                l.sector.fill(null)
+                l.sectorValue.fill("")
+                l.sectorFlags.forEach { it.fill(false) }
+            }
+            l.laps = n
+            if (l.lapCounts.lastOrNull() != n) {
+                l.lapTimes += t
+                l.lapCounts += n
+            }
+        }
+    }
+
+    private fun applySector(l: Live, i: Int, o: JSONObject, t: Long) {
+        // The last sector can land just after the crossing: it belongs to the lap just done.
+        val crossed = l.crossedAt
+        if (i == 2 && crossed != null && t - crossed in 1..LATE_SECTOR_MS && l.sector[0] == null) {
+            val value = o.optString("Value")
+            if (value.isNotEmpty()) {
+                val flags = booleanArrayOf(o.optBoolean("PersonalFastest"), o.optBoolean("OverallFastest"))
+                l.lapSectors[2] = SectorCell(value, pace(flags))
+            }
+            return
+        }
+        if (o.has("Value")) {
+            val value = o.optString("Value")
+            // A sector emptied means a new lap: its flags no longer apply.
+            if (value.isEmpty()) l.sectorFlags[i].fill(false)
+            l.sectorValue[i] = value
+        }
+        if (o.has("PersonalFastest")) l.sectorFlags[i][0] = o.optBoolean("PersonalFastest")
+        if (o.has("OverallFastest")) l.sectorFlags[i][1] = o.optBoolean("OverallFastest")
+        l.sector[i] = l.sectorValue[i].takeIf { it.isNotEmpty() }?.let { SectorCell(it, pace(l.sectorFlags[i])) }
+    }
+
+    private fun pace(flags: BooleanArray) = when {
+        flags[1] -> Pace.PURPLE
+        flags[0] -> Pace.GREEN
+        else -> Pace.YELLOW
+    }
+
+    private fun offsetMs(line: String): Long {
+        val h = line.substring(0, 2).toLong()
+        val m = line.substring(3, 5).toLong()
+        val s = line.substring(6, 8).toLong()
+        val ms = line.substring(9, 12).toLong()
+        return ((h * 60 + m) * 60 + s) * 1000 + ms
+    }
+}
