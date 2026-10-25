@@ -193,7 +193,7 @@ private fun Entry(term: String, meaning: String) {
 }
 
 /** Where a feed's box lands once the feed layer is shrunk toward the bottom centre by [scale]. */
-private fun onScreen(r: Rect, width: Float, height: Float, scale: Float) = Rect(
+internal fun onScreen(r: Rect, width: Float, height: Float, scale: Float) = Rect(
     width / 2 + (r.left - width / 2) * scale,
     height + (r.top - height) * scale,
     width / 2 + (r.right - width / 2) * scale,

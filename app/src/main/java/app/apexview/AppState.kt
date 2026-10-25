@@ -1215,14 +1215,21 @@ class AppState(
      */
     var radioX by mutableFloatStateOf(-1f)
     var radioY by mutableFloatStateOf(-1f)
+    /** The panel's size once resized by hand, in canvas pixels; until then its default. */
+    var radioW by mutableFloatStateOf(-1f)
+    var radioH by mutableFloatStateOf(-1f)
 
-    /** The panel's dragged-to spot as fractions of the screen, if it's been moved. */
-    fun savedRadioSpot(): Pair<Float, Float>? =
+    /**
+     * The panel's place, and size if it's been resized, as fractions of the screen: x, y and
+     * optionally w, h.
+     */
+    fun savedRadioSpot(): List<Float>? =
         prefs.getString(PREF_RADIO_SPOT, null)?.split(',')?.mapNotNull { it.toFloatOrNull() }
-            ?.takeIf { it.size == 2 }?.let { it[0] to it[1] }
+            ?.takeIf { it.size >= 2 }
 
     fun storeRadioSpot(width: Float, height: Float) {
-        prefs.edit().putString(PREF_RADIO_SPOT, "${radioX / width},${radioY / height}").apply()
+        val size = if (radioW > 0f && radioH > 0f) ",${radioW / width},${radioH / height}" else ""
+        prefs.edit().putString(PREF_RADIO_SPOT, "${radioX / width},${radioY / height}$size").apply()
     }
 
     /** Feed rectangles, for finding open space. */

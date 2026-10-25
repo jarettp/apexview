@@ -281,7 +281,7 @@ fun ViewerScreen(app: AppState) {
 
         // Over the feeds and the map, under the controls; it doesn't shrink with the feeds.
         if (app.radioOpen) app.timing?.let { timing ->
-            Box(Modifier.zIndex(CHROME_Z - 1)) { RadioPanel(app, timing, width, height) }
+            Box(Modifier.zIndex(CHROME_Z - 1)) { RadioPanel(app, timing, width, height, feedScale = 1f - lift * band / height) }
         }
 
         val fade = motion
