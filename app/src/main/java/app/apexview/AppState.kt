@@ -1055,6 +1055,14 @@ class AppState(
     fun layoutIfRequested(width: Float, height: Float) {
         if (layoutDone == layoutRequest) return
         layoutDone = layoutRequest
+        try {
+            layOut(width, height)
+        } finally {
+            glideNextLayout = false
+        }
+    }
+
+    private fun layOut(width: Float, height: Float) {
         val ordered = bigFirst()
         bigTileId = ordered.firstOrNull()?.id
 
@@ -1062,9 +1070,10 @@ class AppState(
         // still playing. Timing and the map take the half below.
         hinge?.takeIf { laptopActive }?.let { (top, _) ->
             val main = ordered.first()
-            main.place(Layouts.place(LayoutMode.GRID, 1, width, top).first())
+            settle(main, Layouts.place(LayoutMode.GRID, 1, width, top).first())
             raise(main)
-            tiles.filter { it !== main }.forEach { it.place(Slot(width * 2, 0f, it.w)) }
+            // The others slide off to the side, keeping their size, and slide back later.
+            tiles.filter { it !== main }.forEach { settle(it, Slot(width + it.w, it.y, it.w)) }
             return
         }
 
@@ -1108,7 +1117,7 @@ class AppState(
             // without a map (F2, F1 Academy) and maps still loading never leave a bare border.
             else -> Layouts.place(layoutMode, ordered.size, width, height)
         }
-        slots.zip(ordered).forEach { (slot, tile) -> tile.place(slot) }
+        slots.zip(ordered).forEach { (slot, tile) -> settle(tile, slot) }
         placeMapIfNeeded(width, height)
     }
 
@@ -1508,7 +1517,7 @@ class AppState(
         hinge = newHinge
         // The first time the phone is held like a laptop while watching, ask.
         if (newHinge != null && tiles.isNotEmpty() && !prefs.getBoolean(PREF_LAPTOP_ASKED, false)) laptopPromptOpen = true
-        if (laptopActive != was) layoutRequest++
+        if (laptopActive != was) relayoutGliding()
     }
 
     fun answerLaptopPrompt(use: Boolean) {
@@ -1521,11 +1530,24 @@ class AppState(
         val was = laptopActive
         laptopEnabled = on
         prefs.edit().putBoolean(PREF_LAPTOP, on).apply()
-        if (laptopActive != was) layoutRequest++
+        if (laptopActive != was) relayoutGliding()
     }
 
     /** The feed in the big spot (up top in laptop mode), for highlighting it elsewhere. */
     val bigTileIdForUi get() = bigTileId
+
+    /** The next layout moves feeds along the app's curve instead of jumping them. */
+    private var glideNextLayout = false
+
+    private fun relayoutGliding() {
+        glideNextLayout = true
+        layoutRequest++
+    }
+
+    /** Puts a feed in its slot: straight there, or gliding when the layout asked to. */
+    private fun settle(tile: Tile, slot: Slot) {
+        if (glideNextLayout) glide(tile, slot) else tile.place(slot)
+    }
 
     /** In laptop mode, puts [tile] in the one spot above the hinge. */
     private fun putOnTop(tile: Tile) {

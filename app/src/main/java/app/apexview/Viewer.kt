@@ -22,6 +22,8 @@ import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.slideInVertically
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
@@ -256,25 +258,39 @@ fun ViewerScreen(app: AppState) {
                 key(tile.id) { TileView(app, tile) }
             }
 
-            // Laptop mode: the half below the hinge is the timing tower and the map.
-            val hinge = app.hinge
-            if (app.laptopActive && hinge != null) {
+            // Laptop mode: the half below the hinge is the timing tower and the map. It rises in
+            // as the feeds glide into place and sinks away when the phone opens flat, while the
+            // usual map fades the other way; one curve, one duration, as the feeds.
+            val laptop = app.laptopActive && app.hinge != null
+            // The last hinge seen, so the panel still knows its place while it leaves.
+            var lastHinge by remember { mutableStateOf(app.hinge) }
+            app.hinge?.let { lastHinge = it }
+            val swap = tween<Float>(Motion.SCREEN_MS, easing = EaseOut)
+            val slide = tween<IntOffset>(Motion.SCREEN_MS, easing = EaseOut)
+            AnimatedVisibility(
+                laptop,
+                Modifier.zIndex(1e9f),
+                enter = fadeIn(swap) + slideInVertically(slide) { it / 2 },
+                exit = fadeOut(swap) + slideOutVertically(slide) { it / 2 },
+            ) {
+                val top = lastHinge?.second ?: height
                 LaptopPanel(
                     app, app.timing,
                     Modifier
-                        .offset { IntOffset(0, hinge.second.roundToInt()) }
-                        .requiredSize(with(density) { width.toDp() }, with(density) { (height - hinge.second).coerceAtLeast(0f).toDp() })
-                        .zIndex(1e9f),
+                        .offset { IntOffset(0, top.roundToInt()) }
+                        .requiredSize(with(density) { width.toDp() }, with(density) { (height - top).coerceAtLeast(0f).toDp() }),
                 )
-            } else
+            }
             // Above every tile (their z grows by one per touch), below the controls.
             app.timing?.let { timing ->
-                when (app.mapMode) {
-                    MapMode.TRACK -> Box(Modifier.fillMaxSize().zIndex(1e9f)) { MapPanelView(app, timing) }
-                    MapMode.EDGE -> Box(Modifier.fillMaxSize().zIndex(1e9f)) {
-                        EdgeMap(app, timing, width, height, edgeInset, cornerRadius)
+                AnimatedVisibility(!laptop, Modifier.fillMaxSize().zIndex(1e9f), enter = fadeIn(swap), exit = fadeOut(swap)) {
+                    when (app.mapMode) {
+                        MapMode.TRACK -> Box(Modifier.fillMaxSize()) { MapPanelView(app, timing) }
+                        MapMode.EDGE -> Box(Modifier.fillMaxSize()) {
+                            EdgeMap(app, timing, width, height, edgeInset, cornerRadius)
+                        }
+                        MapMode.OFF -> Unit
                     }
-                    MapMode.OFF -> Unit
                 }
             }
         }
