@@ -81,6 +81,8 @@ class LiveTimingFeed(
     private var corners: List<Corner>? = null
     private var sectors: List<Corner> = emptyList()
     private val trackStatusLines = StringBuilder()
+    /** The track's offset from GMT ("02:00:00"), for restart times given in local time. */
+    private var gmtOffset: String? = null
     /** The published circuit shape, used until a lap with its finish line is traced. */
     private var circuitOutline: FloatArray? = null
     private val topicCounts = mutableMapOf<String, Int>()
@@ -235,6 +237,7 @@ class LiveTimingFeed(
             "SessionInfo" -> (data as? JSONObject)?.let { info ->
                 info.optString("Type").takeIf { it.isNotEmpty() }?.let { sessionType = it }
                 info.optString("Path").takeIf { it.isNotEmpty() }?.let { sessionPath = it }
+                info.optString("GmtOffset").takeIf { it.isNotEmpty() }?.let { gmtOffset = it }
             }
             "TeamRadio" -> (data as? JSONObject)?.let { archive.addRadio(it, radio) }
             "TimingData" -> append(timingLines, start, utc, data)
@@ -304,10 +307,15 @@ class LiveTimingFeed(
             startedUtc = runCatching { archive.parseSessionStarted(status, start) }.getOrNull(),
             finishedUtc = runCatching { archive.parseChequered(controlLines.toString(), start) }.getOrNull(),
             marshalSectors = sectors,
-            flags = TrackFlags(
-                runCatching { archive.parseSectorFlags(controlLines.toString(), start) }.getOrDefault(emptyList()),
-                runCatching { archive.parseTrackStatus(trackStatusLines.toString(), start) }.getOrDefault(emptyList()),
-            ),
+            flags = controlLines.toString().let { control ->
+                TrackFlags(
+                    runCatching { archive.parseSectorFlags(control, start) }.getOrDefault(emptyList()),
+                    runCatching { archive.parseTrackStatus(trackStatusLines.toString(), start) }.getOrDefault(emptyList()),
+                    runCatching { archive.parseSafetyCarIn(control, start) }.getOrDefault(emptyList()),
+                    gmtOffset?.let { runCatching { archive.parseResumptions(control, start, it) }.getOrNull() }.orEmpty(),
+                    runCatching { archive.parseRedFlags(control, start) }.getOrDefault(emptyList()),
+                )
+            },
             laps = laps,
             radio = radio.sortedBy { it.utc },
             radioBase = LiveTimingArchive.BASE + sessionPath,

@@ -48,22 +48,58 @@ class SectorFlag(val utc: Long, val sector: Int, val level: Int)
 
 /** What the whole track is under, with the words the map shows for it. */
 enum class TrackCondition(val label: String?) {
-    CLEAR(null), SAFETY_CAR("Safety car"), VSC("Virtual safety car"), VSC_ENDING("VSC ending"), RED("Red flag"),
+    CLEAR(null), SAFETY_CAR("Safety car"), SAFETY_CAR_ENDING("Safety car in this lap"),
+    VSC("Virtual safety car"), VSC_ENDING("VSC ending"), RED("Red flag");
+
+    /** About to go green: the yellow pulses until it does. */
+    val ending get() = this == SAFETY_CAR_ENDING || this == VSC_ENDING
+    val safetyCar get() = this == SAFETY_CAR || this == SAFETY_CAR_ENDING
 }
 
-/** The flags at one moment: the whole track's condition, and the yellow sectors (number to level). */
-class FlagPicture(val track: TrackCondition, val yellow: Map<Int, Int>)
+/** A time race control has announced ("Q3 WILL RESUME AT 17:04"): what, and when (UTC ms). */
+class Resumption(val announcedUtc: Long, val atUtc: Long, val what: String)
 
 /**
- * Race control's flags through a session: sector yellows from its messages, and the whole track's
- * condition from F1's track status (4 safety car, 5 red, 6 VSC, 7 VSC ending). Both oldest first.
+ * The flags at one moment: the whole track's condition, the yellow sectors (number to level),
+ * and the next announced restart, if one is coming.
  */
-class TrackFlags(val sectors: List<SectorFlag>, val status: List<Pair<Long, Int>>) {
+class FlagPicture(val track: TrackCondition, val yellow: Map<Int, Int>, val resumption: Resumption? = null) {
+    /** The line at the foot of the map: "Red flag · Q3 resumes in 4:12", "Safety car", or null. */
+    fun caption(t: Long): String? = listOfNotNull(
+        track.label,
+        resumption?.let { "${it.what} in ${countdown(it.atUtc - t)}" },
+    ).joinToString(" · ").ifEmpty { null }
+
+    private fun countdown(ms: Long): String {
+        val s = (ms + 999) / 1000
+        return if (s >= 3600) "%d:%02d:%02d".format(s / 3600, s / 60 % 60, s % 60) else "%d:%02d".format(s / 60, s % 60)
+    }
+}
+
+/**
+ * Race control's flags through a session: sector yellows from its messages, the whole track's
+ * condition from F1's track status (4 safety car, 5 red, 6 VSC, 7 VSC ending), when the safety
+ * car was called in, and announced restart times. All oldest first.
+ */
+class TrackFlags(
+    val sectors: List<SectorFlag>,
+    val status: List<Pair<Long, Int>>,
+    val safetyCarIn: List<Long> = emptyList(),
+    val resumptions: List<Resumption> = emptyList(),
+    /** Red flags from race control, start to green (UTC ms): track status doesn't always mark them. */
+    val redFlags: List<Pair<Long, Long>> = emptyList(),
+) {
     fun at(t: Long): FlagPicture {
         var code = 1
-        for ((utc, c) in status) if (utc <= t) code = c else break
-        val track = when (code) {
-            4 -> TrackCondition.SAFETY_CAR
+        var since = 0L
+        for ((utc, c) in status) {
+            if (utc > t) break
+            if (c != code) since = utc
+            code = c
+        }
+        val track = if (redFlags.any { (from, to) -> t in from until to }) TrackCondition.RED else when (code) {
+            // "Safety car in this lap" during this safety car period: it's coming in.
+            4 -> if (safetyCarIn.any { it in since..t }) TrackCondition.SAFETY_CAR_ENDING else TrackCondition.SAFETY_CAR
             5 -> TrackCondition.RED
             6 -> TrackCondition.VSC
             7 -> TrackCondition.VSC_ENDING
@@ -78,7 +114,9 @@ class TrackFlags(val sectors: List<SectorFlag>, val status: List<Pair<Long, Int>
                 else -> yellow[f.sector] = f.level
             }
         }
-        return FlagPicture(track, yellow)
+        // The latest announcement still ahead; announced within the hour, so a stale one never lingers.
+        val resumption = resumptions.lastOrNull { it.announcedUtc <= t && t < it.atUtc && t - it.announcedUtc < 3_600_000 }
+        return FlagPicture(track, yellow, resumption)
     }
 
     companion object {
@@ -293,9 +331,14 @@ class LiveTimingArchive(private val token: String, private val userAgent: String
         val started = runCatching { parseSessionStarted(fetch(path + "SessionStatus.jsonStream"), streamStart) }.getOrNull()
         val control = runCatching { fetch(path + "RaceControlMessages.jsonStream") }.getOrNull()
         val chequered = control?.let { runCatching { parseChequered(it, streamStart) }.getOrNull() }
+        // Restart times come in the track's local time; the session's offset from GMT turns them to UTC.
+        val gmtOffset = runCatching { JSONObject(fetch(path + "SessionInfo.json")).optString("GmtOffset") }.getOrNull()
         val flags = TrackFlags(
             control?.let { runCatching { parseSectorFlags(it, streamStart) }.getOrNull() }.orEmpty(),
             runCatching { parseTrackStatus(fetch(path + "TrackStatus.jsonStream"), streamStart) }.getOrDefault(emptyList()),
+            control?.let { runCatching { parseSafetyCarIn(it, streamStart) }.getOrNull() }.orEmpty(),
+            control?.let { c -> gmtOffset?.let { runCatching { parseResumptions(c, streamStart, it) }.getOrNull() } }.orEmpty(),
+            control?.let { runCatching { parseRedFlags(it, streamStart) }.getOrNull() }.orEmpty(),
         )
         val tyres = runCatching { TyreParser.parse(fetch(path + "TimingAppData.jsonStream"), streamStart) }.getOrDefault(emptyMap())
         val radio = runCatching { parseRadio(fetch(path + "TeamRadio.jsonStream")) }
@@ -403,6 +446,66 @@ class LiveTimingArchive(private val token: String, private val userAgent: String
                 else -> null
             }
         }.sortedBy { it.utc }
+
+    /**
+     * Each red flag from race control, until the next green light, chequered flag or session
+     * (re)start; open-ended while it's still out.
+     */
+    internal fun parseRedFlags(stream: String, streamStart: Long): List<Pair<Long, Long>> {
+        val out = mutableListOf<Pair<Long, Long>>()
+        var since: Long? = null
+        controlMessages(stream, streamStart).forEach { (m, utc) ->
+            val flag = m.optString("Flag")
+            // Not "TRACK CLEAR": race control sends that while the session is still stopped (Spa 2026, Q3).
+            val green = flag == "GREEN" || flag == "CHEQUERED" ||
+                (m.optString("Category") == "SessionStatus" && m.optString("Message").contains("STARTED"))
+            when {
+                flag == "RED" -> if (since == null) since = utc
+                green -> since?.let { out += it to utc; since = null }
+            }
+        }
+        since?.let { out += it to Long.MAX_VALUE }
+        return out
+    }
+
+    /** When race control said "SAFETY CAR IN THIS LAP". */
+    internal fun parseSafetyCarIn(stream: String, streamStart: Long): List<Long> =
+        controlMessages(stream, streamStart)
+            .filter { (m, _) -> m.optString("Category") == "SafetyCar" && m.optString("Message").contains("IN THIS LAP") }
+            .map { it.second }
+
+    /**
+     * Announced restarts: "Q3 WILL RESUME AT 17:04", "RACE WILL RESUME AT 15:42", "SQ2 WILL START
+     * AT 17:08", "ESTIMATED TIME OF SQ1 RESUMPTION - 16:59". Times are the track's local time;
+     * [gmtOffset] ("02:00:00") is the session's offset from GMT.
+     */
+    internal fun parseResumptions(stream: String, streamStart: Long, gmtOffset: String): List<Resumption> {
+        val zone = parseOffset(gmtOffset)
+        return controlMessages(stream, streamStart).mapNotNull { (m, utc) ->
+            val text = m.optString("Message").uppercase()
+            WILL_AT.find(text)?.groupValues?.let { g -> return@mapNotNull resumption(utc, zone, g[1], g[2], g[3], g[4]) }
+            ESTIMATED.find(text)?.groupValues?.let { g ->
+                return@mapNotNull resumption(utc, zone, g[1], if (g[2] == "RESUMPTION") "RESUME" else "START", g[3], g[4])
+            }
+            null
+        }
+    }
+
+    /** One announcement as a [Resumption]: the next time it's [h]:[min] at the track after it was made. */
+    private fun resumption(utc: Long, zone: java.time.ZoneOffset, who: String, verb: String, h: String, min: String): Resumption? {
+        val said = java.time.Instant.ofEpochMilli(utc).atOffset(zone)
+        var at = said.withHour(h.toIntOrNull() ?: return null).withMinute(min.toIntOrNull() ?: return null).withSecond(0).withNano(0)
+        if (at.isBefore(said.minusHours(1))) at = at.plusDays(1)
+        val name = who.removePrefix("THE ").trim().let { w ->
+            if (w.matches(Regex("""S?Q\d"""))) w else w.lowercase().replaceFirstChar { it.uppercase() }
+        }
+        val action = when (verb) {
+            "RESUME" -> "resumes"
+            "RESTART" -> "restarts"
+            else -> "starts"
+        }
+        return Resumption(utc, at.toInstant().toEpochMilli(), "$name $action")
+    }
 
     /** TrackStatus.jsonStream: the whole track's status code as it changes. */
     internal fun parseTrackStatus(stream: String, streamStart: Long): List<Pair<Long, Int>> =
@@ -594,7 +697,7 @@ class LiveTimingArchive(private val token: String, private val userAgent: String
     }.getOrNull()
 
     /** "-05:00:00" to a zone offset. */
-    private fun parseOffset(text: String): java.time.ZoneOffset {
+    internal fun parseOffset(text: String): java.time.ZoneOffset {
         val negative = text.startsWith("-")
         val (h, m) = text.trimStart('-', '+').split(":").let { it[0].toInt() to it.getOrElse(1) { "0" }.toInt() }
         return java.time.ZoneOffset.ofHoursMinutes(if (negative) -h else h, if (negative) -m else m)
@@ -764,6 +867,9 @@ class LiveTimingArchive(private val token: String, private val userAgent: String
         val ms = line.substring(9, 12).toLong()
         return ((h * 60 + m) * 60 + s) * 1000 + ms
     }
+
+    private val WILL_AT = Regex("""^(?:THE )?([A-Z0-9 ]+?) WILL (RESUME|RESTART|START) AT (\d{1,2}):(\d{2})""")
+    private val ESTIMATED = Regex("""ESTIMATED TIME OF (?:THE )?([A-Z0-9 ]+?) (RESUMPTION|RESTART|START) ?-? ?(\d{1,2}):(\d{2})""")
 
     companion object {
         internal const val BASE = "https://livetiming.formula1.com/static/"

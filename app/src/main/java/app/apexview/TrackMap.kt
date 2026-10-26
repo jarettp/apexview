@@ -1,6 +1,7 @@
 package app.apexview
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.foundation.background
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.rounded.OpenWith
@@ -374,18 +375,25 @@ private fun TrackDrawing(app: AppState, timing: SessionTiming, width: Float, hei
     val marks = remember(timing, timing.startLine) { LineMarks(timing) }
     val finishLabel = remember(marks) { measurer.label(marks.finishLabel, 8.sp) }
     val startLabel = remember { measurer.label("START", 8.sp) }
-    val sectors = remember(fit) { sectorPaths(timing) { f -> timing.geometry.pointAt(f).let { g -> fit.map(g[0], g[1]) } } }
-    val conditions = rememberConditionLabels(measurer)
+    fun lapPoint(f: Float) = timing.geometry.pointAt(f).let { g -> fit.map(g[0], g[1]) }
+    val sectors = remember(fit) { sectorPaths(timing, ::lapPoint) }
+    val scLabel = remember { measurer.label("SC", 8.sp) }
+    val pulse by rememberPulse()
 
     val now = rememberMapTime(app)
     val cars = carsAt(timing, now).map { it to fit.map(it.x, it.y) }
     val flags = timing.flags.at(now)
+    val caption = rememberCaption(measurer, flags, now)
+    val safetyCar = if (!flags.track.safetyCar) null else leaderAt(timing, now)
+        ?.let { leader -> cars.firstOrNull { it.first.number == leader }?.first }
+        ?.let { lapPoint(timing.geometry.progress(it.x, it.y) + SAFETY_CAR_AHEAD) }
 
     Canvas(Modifier.fillMaxSize().graphicsLayer(alpha = app.mapOpacity)) {
         drawPath(path, Color.Black.copy(alpha = 0.45f), style = Stroke(7.dp.toPx()))
         drawPath(path, Color.White.copy(alpha = 0.6f), style = Stroke(3.dp.toPx()))
-        drawFlags(flags, path, sectors, 3.5.dp.toPx())
-        drawCondition(flags, conditions, width / 2, height - 4.dp.toPx())
+        drawFlags(flags, path, sectors, 3.5.dp.toPx(), pulse)
+        drawSectorGlyphs(flags, sectors, 14.dp.toPx()) { f -> lapPoint(f).let { p -> p + outward(p, Offset(width / 2, height / 2)) * 18.dp.toPx() } }
+        drawCaption(flags, caption, width / 2, height - 4.dp.toPx(), pulse)
         val center = Offset(width / 2, height / 2)
 
         fun mark(f: Float, chequered: Boolean, label: TextLayoutResult) {
@@ -416,64 +424,138 @@ private fun TrackDrawing(app: AppState, timing: SessionTiming, width: Float, hei
             val alpha = drawCar(timing, car, p, r)
             names[car.number]?.let { drawText(it, topLeft = Offset(p.x + r + 3.dp.toPx(), p.y - it.size.height / 2f), alpha = alpha) }
         }
+        safetyCar?.let { drawSafetyCar(it, 10.dp.toPx(), scLabel) }
     }
     CarTargets(app, cars.map { (car, p) -> car.number to p })
 }
 
 private val FlagYellow = Color(0xFFFFD60A)
 private val FlagRed = Color(0xFFFF3B30)
+/** How far ahead of the leader the safety car is drawn, as a fraction of the lap. */
+private const val SAFETY_CAR_AHEAD = 0.015f
+
+/** One marshal sector's stretch of the lap, and where it starts (as a lap fraction). */
+private class SectorShape(val path: Path, val from: Float)
 
 /**
- * Each marshal sector's stretch of the lap as a path, keyed by sector number. [point] places a
- * lap fraction on screen; a sector runs from its own start to the next one's.
+ * Each marshal sector's stretch of the lap, keyed by sector number. [point] places a lap
+ * fraction on screen; a sector runs from its own start to the next one's.
  */
-private fun sectorPaths(timing: SessionTiming, point: (Float) -> Offset): Map<Int, Path> {
+private fun sectorPaths(timing: SessionTiming, point: (Float) -> Offset): Map<Int, SectorShape> {
     val starts = timing.marshalSectors.sortedBy { it.number }.map { it.number to timing.geometry.progress(it.x, it.y) }
     if (starts.size < 2) return emptyMap()
     return starts.mapIndexed { i, (number, from) ->
         var to = starts[(i + 1) % starts.size].second
         if (to <= from) to += 1f
         val steps = ((to - from) * 400).toInt().coerceAtLeast(6)
-        number to Path().apply {
-            for (k in 0..steps) {
-                val p = point(from + (to - from) * k / steps)
-                if (k == 0) moveTo(p.x, p.y) else lineTo(p.x, p.y)
-            }
-        }
+        number to SectorShape(
+            Path().apply {
+                for (k in 0..steps) {
+                    val p = point(from + (to - from) * k / steps)
+                    if (k == 0) moveTo(p.x, p.y) else lineTo(p.x, p.y)
+                }
+            },
+            from,
+        )
     }.toMap()
 }
 
 /**
  * Race control's flags over the drawn track: all of it red under a red flag, yellow under the
- * safety car or VSC, otherwise just the yellow sectors (double yellows thicker).
+ * safety car or VSC (pulsing once it's coming in), otherwise just the yellow sectors (double
+ * yellows thicker).
  */
-private fun DrawScope.drawFlags(flags: FlagPicture, whole: Path, sectors: Map<Int, Path>, width: Float) {
+private fun DrawScope.drawFlags(flags: FlagPicture, whole: Path, sectors: Map<Int, SectorShape>, width: Float, pulse: Float) {
     when (flags.track) {
         TrackCondition.RED -> drawPath(whole, FlagRed, style = Stroke(width))
         TrackCondition.CLEAR -> flags.yellow.forEach { (sector, level) ->
             sectors[sector]?.let {
-                drawPath(it, FlagYellow, style = Stroke(if (level >= 2) width * 1.6f else width, cap = androidx.compose.ui.graphics.StrokeCap.Round))
+                drawPath(it.path, FlagYellow, style = Stroke(if (level >= 2) width * 1.6f else width, cap = androidx.compose.ui.graphics.StrokeCap.Round))
             }
         }
-        else -> drawPath(whole, FlagYellow, style = Stroke(width))
+        else -> drawPath(whole, FlagYellow, style = Stroke(width), alpha = if (flags.track.ending) pulse else 1f)
     }
 }
 
-/** "Red flag", "Safety car" and the like, centred on [x] with its foot at [bottom]. */
-private fun DrawScope.drawCondition(flags: FlagPicture, labels: Map<TrackCondition, TextLayoutResult>, x: Float, bottom: Float) {
-    val label = labels[flags.track] ?: return
+/** A small flag on a pole, [size] tall, centred on [at]. */
+private fun DrawScope.drawFlagGlyph(at: Offset, size: Float, color: Color, alpha: Float = 1f) {
+    val w = size * 0.62f
+    val left = at.x - w / 2
+    val top = at.y - size / 2
+    val cloth = Path().apply {
+        moveTo(left, top)
+        cubicTo(left + w * 0.35f, top - size * 0.08f, left + w * 0.65f, top + size * 0.1f, left + w, top)
+        lineTo(left + w, top + size * 0.45f)
+        cubicTo(left + w * 0.65f, top + size * 0.55f, left + w * 0.35f, top + size * 0.37f, left, top + size * 0.45f)
+        close()
+    }
+    val shade = Color.Black.copy(alpha = 0.7f * alpha)
+    val pole = size * 0.11f
+    drawLine(shade, Offset(left, top), Offset(left, top + size), strokeWidth = pole + 3f)
+    drawPath(cloth, shade, style = Stroke(3f))
+    drawLine(color, Offset(left, top), Offset(left, top + size), strokeWidth = pole, alpha = alpha)
+    drawPath(cloth, color, alpha = alpha)
+}
+
+/** A yellow flag where each yellow sector starts; [place] puts a lap fraction's flag on screen. */
+private fun DrawScope.drawSectorGlyphs(flags: FlagPicture, sectors: Map<Int, SectorShape>, size: Float, place: (Float) -> Offset) {
+    if (flags.track != TrackCondition.CLEAR) return
+    flags.yellow.keys.forEach { sector -> sectors[sector]?.let { drawFlagGlyph(place(it.from), size, FlagYellow) } }
+}
+
+/**
+ * The line at the foot of the map ("Red flag · Q3 resumes in 4:12"), centred on [x] with its foot
+ * at [bottom], after a flag in the condition's colour. Pulses with the yellow when it's ending.
+ */
+private fun DrawScope.drawCaption(flags: FlagPicture, caption: TextLayoutResult?, x: Float, bottom: Float, pulse: Float) {
+    caption ?: return
+    val color = when (flags.track) {
+        TrackCondition.RED -> FlagRed
+        TrackCondition.CLEAR -> Color.White
+        else -> FlagYellow
+    }
+    val alpha = if (flags.track.ending) pulse else 1f
+    val glyph = if (flags.track != TrackCondition.CLEAR) caption.size.height * 0.9f else 0f
+    val gap = if (glyph > 0f) 7.dp.toPx() else 0f
+    val left = x - (glyph * 0.62f + gap + caption.size.width) / 2
+    if (glyph > 0f) drawFlagGlyph(Offset(left + glyph * 0.31f, bottom - caption.size.height / 2f), glyph, color, alpha)
     drawText(
-        label,
-        color = if (flags.track == TrackCondition.RED) FlagRed else FlagYellow,
-        topLeft = Offset(x - label.size.width / 2f, bottom - label.size.height),
+        caption,
+        color = color,
+        topLeft = Offset(left + glyph * 0.62f + gap, bottom - caption.size.height),
+        alpha = alpha,
         shadow = androidx.compose.ui.graphics.Shadow(Color.Black.copy(alpha = 0.8f), blurRadius = 8f),
     )
 }
 
-@Composable
-private fun rememberConditionLabels(measurer: androidx.compose.ui.text.TextMeasurer) = remember {
-    TrackCondition.entries.mapNotNull { c -> c.label?.let { c to measurer.label(it, 15.sp) } }.toMap()
+/** The safety car: a yellow dot marked SC. F1 doesn't send its position, so it rides just ahead of the leader. */
+private fun DrawScope.drawSafetyCar(at: Offset, radius: Float, label: TextLayoutResult) {
+    drawCircle(Color.Black, radius + 1.5.dp.toPx(), at)
+    drawCircle(FlagYellow, radius, at)
+    drawText(label, color = Color.Black, topLeft = at - Offset(label.size.width / 2f, label.size.height / 2f))
 }
+
+/** The race leader's car number at [now], from the timing cards. */
+private fun leaderAt(timing: SessionTiming, now: Long): String? =
+    timing.laps.entries.mapNotNull { (number, laps) -> laps.at(now)?.position?.let { number to it } }.minByOrNull { it.second }?.first
+
+/** The caption for [flags] at [now], measured once per change (the countdown ticks each second). */
+@Composable
+private fun rememberCaption(measurer: TextMeasurer, flags: FlagPicture, now: Long): TextLayoutResult? {
+    val text = flags.caption(now)
+    return remember(text) { text?.let { measurer.label(it, 15.sp) } }
+}
+
+/** 0.3 to 1 and back, gently, for flags about to go green. */
+@Composable
+private fun rememberPulse() = androidx.compose.animation.core.rememberInfiniteTransition(label = "flags").animateFloat(
+    0.3f, 1f,
+    androidx.compose.animation.core.infiniteRepeatable(
+        androidx.compose.animation.core.tween(1100, easing = EaseOut),
+        androidx.compose.animation.core.RepeatMode.Reverse,
+    ),
+    label = "pulse",
+)
 
 private fun outward(p: Offset, center: Offset): Offset {
     val d = p - center
@@ -561,21 +643,27 @@ fun EdgeMap(app: AppState, timing: SessionTiming, width: Float, height: Float, i
     val finishLabel = remember(marks) { measurer.label(marks.finishLabel, 8.sp) }
     val startLabel = remember { measurer.label("START", 8.sp) }
     val sectors = remember(ribbon, timing) { sectorPaths(timing, ribbon::point) }
-    val conditions = rememberConditionLabels(measurer)
+    val scLabel = remember { measurer.label("SC", 7.sp) }
+    val pulse by rememberPulse()
 
     val now = rememberMapTime(app)
     val cars = carsAt(timing, now)
         .map { car -> car to timing.geometry.progress(car.x, car.y) }
         .sortedBy { it.second }
     val flags = timing.flags.at(now)
+    val caption = rememberCaption(measurer, flags, now)
+    val safetyCar = if (!flags.track.safetyCar) null else leaderAt(timing, now)
+        ?.let { leader -> cars.firstOrNull { it.first.number == leader }?.second }
+        ?.let { it + SAFETY_CAR_AHEAD }
 
     Canvas(Modifier.fillMaxSize().graphicsLayer(alpha = app.mapOpacity)) {
         val line = ribbon.path()
         drawPath(line, Color.Black.copy(alpha = 0.5f), style = Stroke(6.dp.toPx()))
         drawPath(line, Color.White.copy(alpha = 0.5f), style = Stroke(2.dp.toPx()))
-        drawFlags(flags, line, sectors, 2.5.dp.toPx())
+        drawFlags(flags, line, sectors, 2.5.dp.toPx(), pulse)
+        drawSectorGlyphs(flags, sectors, 12.dp.toPx()) { f -> ribbon.point(f) + ribbon.inward(f) * 12.dp.toPx() }
         // Above the bottom of the loop, clear of the car names that sit inside it.
-        drawCondition(flags, conditions, width / 2, height - inset / 2 - 56.dp.toPx())
+        drawCaption(flags, caption, width / 2, height - inset / 2 - 56.dp.toPx(), pulse)
 
         fun tick(f: Float, length: Float, stroke: Float) {
             val p = ribbon.point(f)
@@ -625,6 +713,7 @@ fun EdgeMap(app: AppState, timing: SessionTiming, width: Float, height: Float, i
             val at = p + ribbon.inward(f) * (14 + level * 13).dp.toPx()
             drawText(label, topLeft = at - Offset(label.size.width / 2f, label.size.height / 2f), alpha = alpha)
         }
+        safetyCar?.let { drawSafetyCar(ribbon.point(it), 7.5.dp.toPx(), scLabel) }
     }
     CarTargets(app, cars.map { (car, f) -> car.number to ribbon.point(f) })
 }
