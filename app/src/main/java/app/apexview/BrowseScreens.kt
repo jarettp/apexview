@@ -737,7 +737,7 @@ private fun PickHero(app: AppState, pick: Pick) {
     val line = when {
         item != null -> listOfNotNull(
             item.meeting.takeIf { it.isNotEmpty() && !title.contains(it.substringBefore(" Grand Prix")) },
-            item.subtitle.takeIf { !item.live },
+            item.subtitle.takeIf { it != "Live" },
             duration(item.durationSec),
         ).joinToString(" · ")
         resume != null -> {

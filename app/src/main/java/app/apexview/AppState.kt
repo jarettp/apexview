@@ -545,7 +545,9 @@ class AppState(
         item.pageId?.let { open(Screen.Collection(it, item.title)); return }
         // Sessions are titled by their weekend in the viewer ("Mexico City Grand Prix · Race").
         val session = weekendContent.values.any { c -> c.sessions.any { it.contentId == item.contentId } }
-        openPicker(item.contentId, if (session && item.meeting.isNotEmpty()) "${item.meeting} · ${item.title}" else item.title, item.image)
+        // Live events carry their weekend's name as their subtitle.
+        val meeting = item.meeting.ifEmpty { if (item.live) item.subtitle.orEmpty() else "" }
+        openPicker(item.contentId, if ((session || item.live) && meeting.isNotEmpty()) "$meeting · ${item.title}" else item.title, item.image)
     }
 
     /** This season's weekend a video belongs to, for its Weekend button. */
