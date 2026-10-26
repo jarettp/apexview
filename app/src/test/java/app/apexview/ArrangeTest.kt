@@ -54,6 +54,10 @@ class ArrangeTest {
         val back = SavedLayout.fromJson(saved.toJson())!!
         assertTrue(back.fits(2000f, 1600f))
         assertFalse(back.fits(900f, 2000f))
+        // The Fold's inner screen: nearly square, but upright and sideways are different layouts.
+        val upright = SavedLayout.of(listOf(Slot(0f, 0f, 2076f)), 2076f, 2152f)
+        assertTrue(upright.fits(2076f, 2152f))
+        assertFalse(upright.fits(2152f, 2076f))
         assertEquals(800f, back.slots(2000f, 1600f)[0].w, 0.01f)
     }
 }

@@ -1050,7 +1050,13 @@ class AppState(
 
     /** The saved arrangement for [n] feeds, if there is one for a screen this shape. */
     fun savedLayout(n: Int): SavedLayout? =
-        SavedLayout.fromJson(prefs.getString(PREF_LAYOUT + n, null))?.takeIf { canvasW <= 0f || it.fits(canvasW, canvasH) }
+        SavedLayout.fromJson(prefs.getString(layoutKey(n), null))?.takeIf { canvasW <= 0f || it.fits(canvasW, canvasH) }
+
+    /** Saved layouts are kept per way up: sideways ones carry an L (upright ones predate this). */
+    private fun layoutKey(n: Int) = PREF_LAYOUT + n + if (canvasW > canvasH) "L" else ""
+
+    /** Upright or sideways, in words, for messages. */
+    val wayUp get() = if (canvasW > canvasH) "sideways" else "upright"
 
     /**
      * Makes the arrangement on screen the one every stream with this many feeds starts in, map
@@ -1060,13 +1066,13 @@ class AppState(
         if (tiles.isEmpty() || canvasW <= 0f) return
         val ordered = bigFirst()
         prefs.edit()
-            .putString(PREF_LAYOUT + ordered.size, SavedLayout.of(ordered.map { Slot(it.x, it.y, it.w) }, canvasW, canvasH).toJson())
+            .putString(layoutKey(ordered.size), SavedLayout.of(ordered.map { Slot(it.x, it.y, it.w) }, canvasW, canvasH).toJson())
             .putString(PREF_DEFAULT_LAYOUT, LayoutMode.CUSTOM.name)
             .apply()
         storeMapPanel()
         defaultLayoutMode = LayoutMode.CUSTOM
         layoutMode = LayoutMode.CUSTOM
-        message = "Saved. Streams with ${ordered.size} feed${if (ordered.size == 1) "" else "s"} start like this."
+        message = "Saved. Streams with ${ordered.size} feed${if (ordered.size == 1) "" else "s"} start like this when the phone is $wayUp."
     }
 
     fun chooseSnap(on: Boolean) {
@@ -1475,11 +1481,28 @@ class AppState(
     private var canvasH = 0f
 
     /**
-     * Folding or unfolding changes the canvas by far more than 10%: lay everything out again for
-     * the new screen. Smaller changes (system bars, a window resize) only pull tiles back on screen.
+     * Each screen shape's hand-placed arrangement (by the way up and the screen's size), kept on
+     * leaving it so that coming back puts the feeds where they were: tile id to x, y, w as
+     * fractions of the screen.
+     */
+    private val arrangements = mutableMapOf<String, Map<Int, FloatArray>>()
+
+    private fun screenKey(w: Float, h: Float) = (if (w > h) "L" else "P") + (minOf(w, h) / 200f).toInt()
+
+    /**
+     * Folding, unfolding or turning the phone: lay the feeds out again for the new screen, or put
+     * back how they were last arranged on a screen this shape. The inner screen is nearly square,
+     * so turning it changes its size by under 4%; it counts all the same (before 0.42 it only
+     * nudged the feeds and they ended up overlapping). Smaller changes (system bars, a window
+     * resize) only pull tiles back on screen.
      */
     fun onCanvasResized(width: Float, height: Float) {
-        val refit = canvasW > 0f && (abs(width - canvasW) > canvasW * 0.1f || abs(height - canvasH) > canvasH * 0.1f)
+        val turned = canvasW > 0f && (canvasW > canvasH) != (width > height)
+        val refit = canvasW > 0f && (turned || abs(width - canvasW) > canvasW * 0.1f || abs(height - canvasH) > canvasH * 0.1f)
+        if (refit && handPlaced && tiles.isNotEmpty() && focusTileId == null && !laptopActive) {
+            arrangements[screenKey(canvasW, canvasH)] =
+                tiles.associate { it.id to floatArrayOf(it.x / canvasW, it.y / canvasH, it.w / canvasW) }
+        }
         if (refit && mapPanel.placed) {
             // The map keeps its place relative to the screen.
             mapPanel.x *= width / canvasW
@@ -1490,10 +1513,23 @@ class AppState(
         canvasW = width
         canvasH = height
         keepMapOnScreen()
-        if (refit) {
+        if (!refit) {
+            keepOnScreen(width, height)
+            return
+        }
+        // Back on a screen shape these same feeds were arranged on by hand: put them back.
+        val back = arrangements[screenKey(width, height)]
+            ?.takeIf { saved -> saved.size == tiles.size && tiles.all { it.id in saved } }
+        if (back != null && focusTileId == null && !laptopActive) {
+            tiles.forEach { t ->
+                val b = back.getValue(t.id)
+                t.place(Slot(b[0] * width, b[1] * height, b[2] * width))
+            }
+            handPlaced = true
+        } else {
             handPlaced = false
             layoutRequest++
-        } else keepOnScreen(width, height)
+        }
     }
 
     /** Pulls tiles back so each one is at least partly on screen. */

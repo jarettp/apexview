@@ -139,7 +139,13 @@ class Arranger(
  * cover screen.
  */
 class SavedLayout(val aspect: Float, val boxes: List<FloatArray>) {
-    fun fits(width: Float, height: Float) = abs(width / height - aspect) < aspect * 0.1f
+    /**
+     * Made for a screen this shape: the same way up, and within 10% of its proportions. The
+     * inner screen is nearly square, so upright and sideways differ by under 10%; the way up
+     * tells them apart.
+     */
+    fun fits(width: Float, height: Float) =
+        (width > height) == (aspect > 1f) && abs(width / height - aspect) < aspect * 0.1f
 
     fun slots(width: Float, height: Float) = boxes.map { Slot(it[0] * width, it[1] * height, it[2] * width) }
 

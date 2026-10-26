@@ -903,7 +903,8 @@ private fun LayoutSheet(app: AppState) {
             val modes = LayoutMode.entries.filter { it != LayoutMode.CUSTOM || hasSaved }
             Segments(modes, app.layoutMode, { it.label }, Modifier.padding(top = 20.dp)) { app.chooseLayout(it) }
             Text(
-                if (hasSaved) "My layout is the one you saved for $n feed${if (n == 1) "" else "s"}." else "Arrange the feeds the way you like, then save it.",
+                if (hasSaved) "My layout is the one you saved for $n feed${if (n == 1) "" else "s"} with the phone ${app.wayUp}."
+                else "Arrange the feeds the way you like, then save it. Upright and sideways each keep their own.",
                 style = Type.footnote,
                 modifier = Modifier.padding(top = 10.dp),
             )
