@@ -1615,6 +1615,7 @@ class AppState(
                 val text = transcriber.transcribe(t.radioBase + next.path, radioHints(t)).ifBlank { NO_WORDS }
                 transcripts[next.path] = text
                 transcriptStore.edit().putString(next.path, text).apply()
+                radioFailuresInRow = 0
             } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
                 // A clip that runs too long is skipped. (This was caught as a cancellation
                 // in 0.23, which ended the whole loop: later clips were never transcribed.)
@@ -1627,6 +1628,10 @@ class AppState(
             } catch (e: Exception) {
                 android.util.Log.w("ApexviewRadio", "transcribe ${next.path}: ${e.message}")
                 failedClips += next.path
+                // Several in a row means the recogniser can't do it at all: say so, and stop trying.
+                if (++radioFailuresInRow >= 3) {
+                    transcriptBlocked = "This phone's speech recogniser couldn't transcribe the clips (${(e as? RecogniserError)?.let { RecogniserError.name(it.code) } ?: e.message}). They still play."
+                }
             } finally {
                 transcribing = null
             }
@@ -1639,9 +1644,12 @@ class AppState(
             t.drivers.values.map { it.team }.distinct() + RadioTranscriber.RADIO_WORDS)
             .filter { it.isNotBlank() }
 
+    private var radioFailuresInRow = 0
+
     /** After the user allows the permission the recogniser asked for. */
     fun retryTranscripts() {
         transcriptBlocked = null
+        radioFailuresInRow = 0
     }
 
     fun stopRadio() {
@@ -2131,7 +2139,7 @@ class AppState(
         const val PERMISSION_NOTE =
             "Android's speech recogniser needs the microphone permission to transcribe. The app never records you."
         const val NO_RECOGNISER_NOTE =
-            "This phone has no on-device speech recognition, so clips play but aren't transcribed."
+            "This phone has no speech recogniser Apexview can use (it needs Android 13 or later), so clips play but aren't transcribed."
         /** The feeds' volume while a radio clip plays: silent, so the radio is clear. */
         private const val RADIO_DUCK = 0f
         private const val PREF_RECENTS = "recents"
