@@ -74,6 +74,17 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import coil.request.ImageRequest
+import androidx.compose.foundation.interaction.collectIsDraggedAsState
+import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.PagerState
+import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.key
+import androidx.compose.ui.draw.clipToBounds
+import coil.imageLoader
+import kotlinx.coroutines.delay
+import kotlin.math.floor
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -208,15 +219,35 @@ private fun ArtCard(
  * where it was (and a card's artwork can shrink back into it).
  */
 @Composable
-private fun <T> Shelf(app: AppState, title: String, items: List<T>, card: @Composable (T, Dp) -> Unit) {
+private fun <T> Shelf(
+    app: AppState,
+    title: String,
+    items: List<T>,
+    /** Names the row's kept scroll position; rows on different pages can share a title. */
+    key: String = title,
+    /** Portrait artwork, for shows and documentaries: more to a row. */
+    posters: Boolean = false,
+    /** A link by the title, such as View all. */
+    action: Pair<String, () -> Unit>? = null,
+    card: @Composable (T, Dp) -> Unit,
+) {
     if (items.isEmpty()) return
     BoxWithConstraints(Modifier.fillMaxWidth()) {
-        val perRow = if (maxWidth >= 600.dp) 3.3f else 1.7f
-        val cardWidth = ((maxWidth - SidePadding * 2 - 12.dp * perRow.toInt()) / perRow).coerceIn(200.dp, 360.dp)
+        val wide = maxWidth >= 600.dp
+        val perRow = if (posters) (if (wide) 5.3f else 2.6f) else if (wide) 3.3f else 1.7f
+        val cardWidth = ((maxWidth - SidePadding * 2 - 12.dp * perRow.toInt()) / perRow).coerceIn(if (posters) 120.dp else 200.dp, 360.dp)
         Column {
-            Text(title, style = Type.title2, modifier = Modifier.padding(start = SidePadding, end = SidePadding, bottom = 12.dp))
+            Row(
+                Modifier.fillMaxWidth().padding(start = SidePadding, end = SidePadding, bottom = 12.dp),
+                verticalAlignment = Alignment.Bottom,
+            ) {
+                Text(title, style = Type.title2, modifier = Modifier.weight(1f))
+                action?.let { (label, onClick) ->
+                    Text(label, style = Type.subhead, modifier = Modifier.pressable(onClick = onClick).padding(start = 12.dp, top = 4.dp))
+                }
+            }
             LazyRow(
-                state = app.rowState(title),
+                state = app.rowState(key),
                 contentPadding = PaddingValues(horizontal = SidePadding),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
@@ -276,7 +307,11 @@ private fun ArtPage(
     listState: LazyListState,
     leading: (@Composable (backdrop: Float) -> Unit)? = null,
     trailing: (@Composable (backdrop: Float) -> Unit)? = null,
-    hero: @Composable ColumnScope.() -> Unit,
+    /** In place of the one image: artwork that changes, as on home's carousel. */
+    backdrop: (@Composable () -> Unit)? = null,
+    /** In place of [hero]'s column: the whole hero area, for content that fills it. */
+    heroBox: (@Composable BoxScope.() -> Unit)? = null,
+    hero: @Composable ColumnScope.() -> Unit = {},
     rows: LazyListScope.() -> Unit,
 ) {
     val density = LocalDensity.current
@@ -294,7 +329,8 @@ private fun ArtPage(
         }
 
         Box(Modifier.fillMaxWidth().height(heroHeight)) {
-            AsyncImage(
+            if (backdrop != null) backdrop()
+            else AsyncImage(
                 // The card's smaller image, already in memory, stands in until this size loads.
                 model = remember(image) {
                     ImageRequest.Builder(context)
@@ -333,7 +369,8 @@ private fun ArtPage(
         LazyColumn(state = listState, modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 40.dp)) {
             item {
                 Box(Modifier.fillMaxWidth().height(heroHeight)) {
-                    Column(
+                    if (heroBox != null) heroBox()
+                    else Column(
                         Modifier.align(Alignment.BottomStart).padding(horizontal = SidePadding, vertical = 8.dp).widthIn(max = 560.dp),
                         content = hero,
                     )
@@ -421,15 +458,33 @@ fun SignInScreen(app: AppState) {
 @Composable
 fun HomeScreen(app: AppState) {
     val now = System.currentTimeMillis()
-    val featured = app.featuredWeekend(now)
     val latest = app.latestWeekend(now)
     val latestContent = latest?.let { app.weekendContent[it.meetingKey] }
     val upcoming = app.weekends.filter { it.startMs > now }
-    val heroKey = featured?.let { "hero-${it.meetingKey}" }
+    val picks = app.suggestions(now).ifEmpty {
+        listOfNotNull(app.featuredWeekend(now)?.let { Pick("${roundLabel(it)} · ${dates(it)}", weekend = it) })
+    }
+    val count = picks.size
+    // Endless both ways: the pager starts among many copies of the picks.
+    val pager = key(count) { rememberPagerState(initialPage = if (count > 1) count * 500 else 0) { if (count > 1) count * 1000 else count } }
+    val dragged by pager.interactionSource.collectIsDraggedAsState()
+    // Turns on its own, and waits a full turn again after you swipe.
+    LaunchedEffect(pager, pager.settledPage, dragged) {
+        if (count < 2 || dragged) return@LaunchedEffect
+        delay(CAROUSEL_MS)
+        pager.animateScrollToPage(pager.currentPage + 1, animationSpec = tween(Motion.SCREEN_MS * 2, easing = EaseOut))
+    }
+    // Every slide's artwork loads ahead, so turning never waits on it.
+    val context = LocalContext.current
+    LaunchedEffect(picks) {
+        picks.forEach { pick ->
+            F1TvApi.picture(pickImage(pick), 1920, 1080)?.let { context.imageLoader.enqueue(ImageRequest.Builder(context).data(it).build()) }
+        }
+    }
 
     ArtPage(
-        image = featured?.image,
-        artKey = heroKey,
+        image = null,
+        artKey = null,
         title = "Apexview",
         listState = app.homeList,
         trailing = { backdrop ->
@@ -438,34 +493,20 @@ fun HomeScreen(app: AppState) {
                 GlyphButton(Icons.Rounded.Settings, "Settings", backdrop = backdrop) { app.open(Screen.Settings) }
             }
         },
-        hero = {
-            if (featured != null) {
-                val live = app.liveNow.firstOrNull()
-                val next = app.nextSession(featured)
-                val eyebrow = when {
-                    live != null -> null
-                    featured.isCurrent(now) && next != null -> "Next: ${next.title} · ${next.subtitle}"
-                    featured.isCurrent(now) -> "${roundLabel(featured)} · This weekend"
-                    featured.startMs > now -> "Next · ${roundLabel(featured)} · ${dates(featured)}"
-                    else -> "${roundLabel(featured)} · ${dates(featured)}"
-                }
-                if (live != null) LiveMark(Modifier.padding(bottom = 6.dp))
-                eyebrow?.let { Text(it, style = Type.footnote.copy(color = Ink.primary.copy(alpha = 0.8f))) }
-                Text(featured.name, style = Type.largeTitle, modifier = Modifier.padding(top = 2.dp))
-                Text(featured.place, style = Type.subhead)
-                Spacer(Modifier.height(16.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    if (live != null) {
-                        PrimaryButton("Watch live", Icons.Rounded.PlayArrow) {
-                            app.openPicker(live.contentId, "${featured.name} · ${live.title}", live.image)
-                        }
-                        SecondaryButton("Weekend") { app.open(Screen.Weekend(featured, heroKey)) }
-                    } else {
-                        PrimaryButton(if (featured.startMs > now) "Schedule" else "Sessions") {
-                            app.open(Screen.Weekend(featured, heroKey))
-                        }
+        backdrop = { CarouselArt(picks, pager) },
+        heroBox = {
+            if (count > 0) {
+                HorizontalPager(state = pager, modifier = Modifier.fillMaxSize()) { page ->
+                    Box(Modifier.fillMaxSize()) {
+                        Column(
+                            Modifier
+                                .align(Alignment.BottomStart)
+                                .padding(start = SidePadding, end = SidePadding, top = 8.dp, bottom = if (count > 1) 30.dp else 8.dp)
+                                .widthIn(max = 560.dp)
+                        ) { PickHero(app, picks[page.mod(count)]) }
                     }
                 }
+                if (count > 1) PageDots(count, pager, Modifier.align(Alignment.BottomStart).padding(start = SidePadding, bottom = 8.dp))
             }
         },
     ) {
@@ -501,7 +542,8 @@ fun HomeScreen(app: AppState) {
             }
         }
 
-        if (app.liveNow.isNotEmpty()) {
+        // The carousel leads with what's live; a row only when there's more than one.
+        if (app.liveNow.size > 1) {
             item {
                 Shelf(app, "Live now", app.liveNow.toList()) { item, width ->
                     ArtCard(item.image, item.title, item.subtitle, width, live = true) {
@@ -523,6 +565,20 @@ fun HomeScreen(app: AppState) {
             }
         }
 
+        // F1 TV's own rows, each video once. The weekend's rows come first (its shows, press
+        // conferences, F1 Academy), then F1 TV's catch-all row for the weekend.
+        val f1Rows = app.homePage?.rows.orEmpty()
+        val shown = latestContent?.sessions.orEmpty().map { it.contentId }.toMutableSet()
+        fun unique(row: CatalogRow) = row.items.filter { it.pageId != null || shown.add(it.contentId) }
+        val weekendRows = f1Rows.filter { r ->
+            r.tag == CatalogRow.WEEKEND || (r.tag != CatalogRow.ARCHIVE && !r.posters && r.items.any { it.meeting.isNotEmpty() && it.meeting == latest?.name })
+        }.sortedBy { it.tag == CatalogRow.WEEKEND }
+        weekendRows.forEach { row ->
+            val items = unique(row)
+            val title = if (row.tag == CatalogRow.WEEKEND) "More from the weekend" else rowTitle(row.title)
+            item { VideoShelf(app, title, items) }
+        }
+
         item {
             Shelf(app, "${app.season} season", app.pastWeekends(now)) { w, width ->
                 val key = "card-${w.meetingKey}"
@@ -540,6 +596,183 @@ fun HomeScreen(app: AppState) {
                     app.open(Screen.Weekend(w, key))
                 }
             }
+            Spacer(Modifier.height(28.dp))
+        }
+
+        f1Rows.firstOrNull { it.tag == CatalogRow.ARCHIVE }?.let { row ->
+            val items = unique(row)
+            item { VideoShelf(app, "Popular races from the archive", items, action = "View all" to { app.open(Screen.Archive) }) }
+        }
+
+        item {
+            SeasonsShelf(app)
+            Spacer(Modifier.height(28.dp))
+        }
+
+        (f1Rows.filter { it.posters } + f1Rows.filter { !it.posters && it.tag != CatalogRow.ARCHIVE && it !in weekendRows }).forEach { row ->
+            val items = unique(row)
+            item { VideoShelf(app, rowTitle(row.title), items, posters = row.posters) }
+        }
+    }
+}
+
+private const val CAROUSEL_MS = 7_000L
+
+/** F1 TV's row names in the app's sentence case, where they're the usual ones. */
+private fun rowTitle(label: String) = when (label) {
+    "Shows & Analysis" -> "Shows and analysis"
+    "Press Conferences" -> "Press conferences"
+    else -> label
+}
+
+private fun pickImage(pick: Pick) = pick.item?.image ?: pick.resume?.image ?: pick.weekend?.image
+
+/** A row of F1 TV videos (or, as [posters], its shows and documentaries), and the space after it. */
+@Composable
+private fun VideoShelf(app: AppState, title: String, items: List<CatalogItem>, key: String = title, posters: Boolean = false, action: Pair<String, () -> Unit>? = null) {
+    if (items.isEmpty()) return
+    Shelf(app, title, items, key = key, posters = posters, action = action) { item, width ->
+        if (posters) PosterCard(item, width) { app.watch(item) }
+        else ArtCard(item.image, item.title, sessionLine(item), width, live = item.live, upcoming = item.upcoming) { app.watch(item) }
+    }
+    Spacer(Modifier.height(28.dp))
+}
+
+/** A show's or documentary's portrait artwork, which carries its own title. */
+@Composable
+private fun PosterCard(item: CatalogItem, width: Dp, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .width(width)
+            .aspectRatio(2f / 3f)
+            .pressable(onClick = onClick)
+            .clip(CardShape)
+            .background(Ink.surface)
+    ) {
+        AsyncImage(
+            model = F1TvApi.picture(item.image, 400, 600),
+            contentDescription = item.title,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier.fillMaxSize(),
+        )
+    }
+}
+
+/** Every season as a row of years; each opens the calendar on that season. */
+@Composable
+private fun SeasonsShelf(app: AppState) {
+    Column {
+        Text("Every season", style = Type.title2, modifier = Modifier.padding(horizontal = SidePadding))
+        Text(
+            "Full races back to ${app.archiveSeasons.last()}",
+            style = Type.subhead,
+            modifier = Modifier.padding(start = SidePadding, end = SidePadding, top = 2.dp, bottom = 4.dp),
+        )
+        LazyRow(
+            state = app.rowState("seasons"),
+            contentPadding = PaddingValues(horizontal = SidePadding),
+            horizontalArrangement = Arrangement.spacedBy(22.dp),
+        ) {
+            items(app.archiveSeasons) { year ->
+                Text(
+                    "$year",
+                    style = Type.title1,
+                    modifier = Modifier
+                        .pressable {
+                            app.chooseCalendarSeason(year)
+                            app.open(Screen.Calendar)
+                        }
+                        .padding(vertical = 8.dp),
+                )
+            }
+        }
+    }
+}
+
+/**
+ * The carousel's artwork. It slides with the pager underneath the hero text, page for page, while
+ * staying put as the page scrolls up over it like every other page's artwork.
+ */
+@Composable
+private fun CarouselArt(picks: List<Pick>, pager: PagerState) {
+    if (picks.isEmpty()) return
+    val context = LocalContext.current
+    val base by remember(pager) { derivedStateOf { floor(pager.currentPage + pager.currentPageOffsetFraction).toInt() } }
+    Box(Modifier.fillMaxSize().clipToBounds()) {
+        for (page in base..base + 1) {
+            key(page) {
+                val image = pickImage(picks[page.mod(picks.size)])
+                AsyncImage(
+                    model = remember(image) {
+                        ImageRequest.Builder(context)
+                            .data(F1TvApi.picture(image, 1920, 1080))
+                            .placeholderMemoryCacheKey(F1TvApi.picture(image, 640, 360))
+                            .crossfade(Motion.FADE_MS)
+                            .build()
+                    },
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .graphicsLayer { translationX = (page - pager.currentPage - pager.currentPageOffsetFraction) * size.width },
+                )
+            }
+        }
+    }
+}
+
+/** One slide's words and buttons: why it's here, what it is, and how to watch it. */
+@Composable
+private fun PickHero(app: AppState, pick: Pick) {
+    val item = pick.item
+    val resume = pick.resume
+    val weekend = pick.weekend
+    if (item?.live == true) LiveMark(Modifier.padding(bottom = 6.dp))
+    else Text(pick.reason, style = Type.footnote.copy(color = Ink.primary.copy(alpha = 0.8f)))
+    val title = when {
+        item != null -> item.title
+        resume != null -> resume.title.substringBefore(" · ")
+        else -> weekend?.name.orEmpty()
+    }
+    val line = when {
+        item != null -> listOfNotNull(
+            item.meeting.takeIf { it.isNotEmpty() && !title.contains(it.substringBefore(" Grand Prix")) },
+            item.subtitle.takeIf { !item.live },
+            duration(item.durationSec),
+        ).joinToString(" · ")
+        resume != null -> {
+            val left = (resume.durationMs - resume.positionMs).coerceAtLeast(0) / 1000
+            listOfNotNull(
+                resume.title.substringAfter(" · ", "").ifEmpty { null },
+                if (left >= 3600) "${left / 3600}h ${left / 60 % 60}m left" else "${left / 60}m left",
+            ).joinToString(" · ")
+        }
+        else -> weekend?.place.orEmpty()
+    }
+    Text(title, style = Type.largeTitle, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 2.dp))
+    if (line.isNotEmpty()) Text(line, style = Type.subhead, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    Spacer(Modifier.height(16.dp))
+    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        when {
+            resume != null -> PrimaryButton("Resume", Icons.Rounded.PlayArrow) { app.resumeWatching(resume) }
+            item != null -> {
+                PrimaryButton(if (item.live) "Watch live" else "Play", Icons.Rounded.PlayArrow) { app.watch(item) }
+                app.weekendOf(item)?.let { w -> SecondaryButton("Weekend") { app.open(Screen.Weekend(w)) } }
+            }
+            weekend != null -> PrimaryButton(if (weekend.startMs > System.currentTimeMillis()) "Schedule" else "Sessions") {
+                app.open(Screen.Weekend(weekend))
+            }
+        }
+    }
+}
+
+/** Which slide is showing: small dots, the current one white. */
+@Composable
+private fun PageDots(count: Int, pager: PagerState, modifier: Modifier) {
+    Row(modifier, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        repeat(count) { i ->
+            val on = pager.currentPage.mod(count) == i
+            Box(Modifier.size(6.dp).clip(CircleShape).background(if (on) Ink.primary else Ink.tertiary))
         }
     }
 }
@@ -590,6 +823,54 @@ fun WeekendScreen(app: AppState, weekend: WeekendInfo, artKey: String?) {
                     }
                 }
             }
+        }
+    }
+}
+
+/** A show's or documentary's page: its episodes, a row per season. */
+@Composable
+fun CollectionScreen(app: AppState, pageId: Int, title: String) {
+    val page = app.collections[pageId]
+    ArtPage(
+        image = page?.image,
+        artKey = null,
+        title = title,
+        listState = rememberLazyListState(),
+        leading = { backdrop -> GlyphButton(Icons.Rounded.ArrowBackIosNew, "Back", backdrop = backdrop) { app.back() } },
+        hero = {
+            Text(page?.title?.ifBlank { null } ?: title, style = Type.largeTitle)
+            page?.description?.takeIf { it.isNotBlank() }?.let {
+                Text(it, style = Type.subhead, maxLines = 3, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 4.dp))
+            }
+        },
+    ) {
+        item { Spacer(Modifier.height(20.dp)) }
+        if (page == null) item { Text("Loading…", style = Type.subhead, modifier = Modifier.padding(horizontal = SidePadding)) }
+        page?.rows?.forEach { row -> item { VideoShelf(app, row.title, row.items, key = "c$pageId-${row.title}") } }
+    }
+}
+
+/** The races F1 TV viewers watch most, a row per season, and the way to every season. */
+@Composable
+fun ArchiveScreen(app: AppState) {
+    val races = app.archive
+    ArtPage(
+        image = races?.firstOrNull()?.image,
+        artKey = null,
+        title = "From the archive",
+        listState = rememberLazyListState(),
+        leading = { backdrop -> GlyphButton(Icons.Rounded.ArrowBackIosNew, "Back", backdrop = backdrop) { app.back() } },
+        hero = {
+            Text("From the archive", style = Type.largeTitle)
+            Text("The races F1 TV viewers watch most. Every season since ${app.archiveSeasons.last()} is in the calendar.", style = Type.subhead)
+            Spacer(Modifier.height(16.dp))
+            SecondaryButton("Every season") { app.open(Screen.Calendar) }
+        },
+    ) {
+        item { Spacer(Modifier.height(20.dp)) }
+        if (races == null) item { Text("Loading…", style = Type.subhead, modifier = Modifier.padding(horizontal = SidePadding)) }
+        races.orEmpty().groupBy { it.year }.toSortedMap(compareByDescending { it }).forEach { (year, list) ->
+            item { VideoShelf(app, if (year > 0) "$year" else "More races", list, key = "archive-$year") }
         }
     }
 }

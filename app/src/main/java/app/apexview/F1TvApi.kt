@@ -52,7 +52,32 @@ data class CatalogItem(
     val startMs: Long,
     /** Scheduled but not started: shown grayed out, not playable yet. */
     val upcoming: Boolean = false,
+    /** F1 TV's content subtype: REPLAY, RACE HIGHLIGHTS, PRESS CONFERENCE, ANALYSIS... */
+    val kind: String = "",
+    /** F1 TV's first genre: Race, Post-Race Show, Weekend Warm-Up, Tech Talk... */
+    val genre: String = "",
+    /** The race weekend it belongs to ("Mexico City Grand Prix"), if any. */
+    val meeting: String = "",
+    val year: Int = 0,
+    /** Set for a show or documentary series: F1 TV's page of its episodes. */
+    val pageId: Int? = null,
 )
+
+/** A titled row of F1 TV's: shows and documentaries come as [posters]. */
+data class CatalogRow(val title: String, val items: List<CatalogItem>, val posters: Boolean = false, val tag: String = "") {
+    companion object {
+        /** The current weekend's own row, a mix of replays, highlights and shows. */
+        const val WEEKEND = "weekend"
+        /** Popular full race replays from every season. */
+        const val ARCHIVE = "archive"
+    }
+}
+
+/** F1 TV's home page: what it features at the top now, and its rows. */
+data class HomePage(val featured: List<CatalogItem>, val rows: List<CatalogRow>)
+
+/** A show's or documentary's page: its episodes in rows, usually one per season. */
+data class CollectionPage(val title: String, val description: String, val image: String?, val rows: List<CatalogRow>)
 
 data class WeekendContent(
     /** Practice, qualifying, sprint and race, in running order. */
@@ -211,6 +236,9 @@ class F1TvApi(private val userAgent: String, private val chromeMajor: String) {
                 live = live,
                 startMs = start,
                 upcoming = upcoming,
+                kind = subtype,
+                genre = meta.optJSONArray("genres")?.optString(0).orEmpty(),
+                meeting = weekend.name,
             )
             if (isSession) sessions += item else videos += item
         }
@@ -242,6 +270,123 @@ class F1TvApi(private val userAgent: String, private val chromeMajor: String) {
             )
         }
         items.filter { it.subtitle == "Replay" } + items.filterNot { it.subtitle == "Replay" }
+    }
+
+    /**
+     * F1 TV's home page. Its top ([HomePage.featured]) is chosen by F1 for the moment: the race
+     * replay, highlights and post-race show after a race, say. Rows that need F1 TV's own
+     * account features (My List), surveys and links to other series are left out.
+     */
+    suspend fun home(): HomePage = withContext(Dispatchers.IO) {
+        val containers = get(url("2.0", "PAGE/$HOME_PAGE/$tier/$groupId"))
+            .getJSONObject("resultObj").optJSONArray("containers") ?: return@withContext HomePage(emptyList(), emptyList())
+        var featured = emptyList<CatalogItem>()
+        val rows = mutableListOf<CatalogRow>()
+        for (i in 0 until containers.length()) {
+            val container = containers.getJSONObject(i)
+            val retrieve = container.optJSONObject("retrieveItems") ?: continue
+            val results = retrieve.optJSONObject("resultObj")?.optJSONArray("containers") ?: continue
+            val items = (0 until results.length()).mapNotNull { catalogItem(results.getJSONObject(it)) }
+            val label = container.optJSONObject("metadata")?.let { text(it, "label") }.orEmpty()
+            val uri = text(retrieve, "uriOriginal")
+            when (val layout = text(container, "layout")) {
+                "super_hero" -> featured = items.filter { it.pageId == null }
+                "horizontal_thumbnail", "vertical_thumbnail", "horizontal_simple_poster" -> {
+                    if (items.isEmpty() || label.isBlank() || "MYLIST" in uri || label.contains("Survey", ignoreCase = true)) continue
+                    val tag = when {
+                        uri.startsWith("/SANDWICH") -> CatalogRow.WEEKEND
+                        "objectSubtype=Replay" in uri && "filter_MeetingKey" !in uri -> CatalogRow.ARCHIVE
+                        else -> ""
+                    }
+                    rows += CatalogRow(label, items, posters = layout == "horizontal_simple_poster", tag = tag)
+                }
+            }
+        }
+        HomePage(featured, rows)
+    }
+
+    /** A show's or documentary's page, by its F1 TV page ID. */
+    suspend fun collection(pageId: Int): CollectionPage = withContext(Dispatchers.IO) {
+        val containers = get(url("2.0", "PAGE/$pageId/$tier/$groupId"))
+            .getJSONObject("resultObj").optJSONArray("containers") ?: return@withContext CollectionPage("", "", null, emptyList())
+        var title = ""
+        var description = ""
+        var hero = emptyList<CatalogItem>()
+        val rows = mutableListOf<CatalogRow>()
+        for (i in 0 until containers.length()) {
+            val container = containers.getJSONObject(i)
+            val label = container.optJSONObject("metadata")?.let { text(it, "label") }.orEmpty()
+            val results = container.optJSONObject("retrieveItems")?.optJSONObject("resultObj")?.optJSONArray("containers")
+            val items = (0 until (results?.length() ?: 0)).mapNotNull { catalogItem(results!!.getJSONObject(it)) }.filter { it.pageId == null }
+            when (text(container, "layout")) {
+                "title" -> title = label
+                "subtitle" -> description = label
+                "hero" -> hero = items
+                "horizontal_thumbnail", "vertical_thumbnail" -> if (items.isNotEmpty()) rows += CatalogRow(label.ifBlank { "Episodes" }, items)
+            }
+        }
+        // The page's lead videos, unless the rows have them already.
+        val listed = rows.flatMap { it.items }.map { it.contentId }.toSet()
+        val lead = hero.filter { it.contentId !in listed }
+        CollectionPage(title, description, hero.firstOrNull()?.image, (if (lead.isEmpty()) emptyList() else listOf(CatalogRow("Latest", lead))) + rows)
+    }
+
+    /** The most watched full race replays from every season, as F1 TV's archive row ranks them. */
+    suspend fun archiveRaces(): List<CatalogItem> = withContext(Dispatchers.IO) {
+        search(
+            "filter_Series" to "Formula 1", "filter_genres" to "Full Race,Race", "filter_objectSubtype" to "Replay",
+            "filter_objectType" to "Video", "orderBy" to "shortPeriod", "sortOrder" to "desc", "maxResults" to "100",
+        ).mapNotNull(::catalogItem).filterNot { it.title.contains("Kids", ignoreCase = true) }
+    }
+
+    /** A season's full race replays, for "last year's race here". */
+    suspend fun raceReplays(season: Int): List<CatalogItem> = withContext(Dispatchers.IO) {
+        search(
+            "filter_Series" to "Formula 1", "filter_genres" to "Full Race,Race", "filter_objectSubtype" to "Replay",
+            "filter_objectType" to "Video", "filter_season" to "$season", "maxResults" to "100",
+        ).mapNotNull(::catalogItem).filterNot { it.title.contains("Kids", ignoreCase = true) }
+    }
+
+    /**
+     * One of F1 TV's tiles as something to watch, or as a series page for a show or documentary
+     * bundle. Links to other series' pages and surveys aren't.
+     */
+    private fun catalogItem(container: JSONObject): CatalogItem? {
+        val meta = container.optJSONObject("metadata") ?: return null
+        val type = text(meta, "contentType")
+        if (type == "LAUNCHER") return null
+        val pageId = if (type != "BUNDLE") null else container.optJSONArray("actions")?.optJSONObject(0)
+            ?.let { PAGE_ID.find(text(it, "uri"))?.groupValues?.get(1)?.toIntOrNull() } ?: return null
+        val id = meta.optLong("contentId")
+        if (pageId == null && id <= 0) return null
+        val emf = meta.optJSONObject("emfAttributes")
+        val subtype = text(meta, "contentSubtype")
+        val genre = meta.optJSONArray("genres")?.optString(0).orEmpty()
+        val start = emf?.optLong("sessionStartDate", 0) ?: 0
+        val live = subtype == "LIVE"
+        val upcoming = subtype == "LIVE_EVENT" && start > System.currentTimeMillis()
+        return CatalogItem(
+            contentId = id,
+            title = text(meta, "title").trim(),
+            subtitle = when {
+                live -> "Live"
+                upcoming -> SESSION_TIME.format(java.util.Date(start))
+                // A race replay's card needs no "Race" under it; its length says enough.
+                genre == "Race" || genre == "Full Race" -> null
+                genre.isNotEmpty() -> genre
+                else -> subtype.lowercase().replace('_', ' ').replaceFirstChar { it.uppercase() }.ifEmpty { null }
+            },
+            image = text(meta, "pictureUrl").ifEmpty { null },
+            durationSec = meta.optInt("duration"),
+            live = live,
+            startMs = start,
+            upcoming = upcoming,
+            kind = subtype,
+            genre = genre,
+            meeting = emf?.let { text(it, "Meeting_Name") }.orEmpty(),
+            year = text(meta, "year").toIntOrNull() ?: 0,
+            pageId = pageId,
+        )
     }
 
     /**
@@ -441,6 +586,9 @@ class F1TvApi(private val userAgent: String, private val chromeMajor: String) {
         const val LANGUAGE = "ENG"
         val PLATFORMS = listOf("WEB_DASH", "TABLET_DASH", "MOBILE_DASH", "WEB_HLS")
         private val API_VERSION = Regex("""\d+\.\d+""")
+        private val PAGE_ID = Regex("""/PAGE/(\d+)/""")
+        /** F1 TV's home page. */
+        private const val HOME_PAGE = 395
         // The date as well as the weekday: "Sun 2:00 PM" alone didn't say which Sunday.
         private val SESSION_TIME = java.text.SimpleDateFormat("EEE, MMM d · h:mm a", java.util.Locale.getDefault())
 

@@ -124,7 +124,20 @@ sealed interface Screen {
     data class Weekend(val weekend: WeekendInfo, val artKey: String? = null) : Screen
     data object Settings : Screen
     data object Calendar : Screen
+    /** A show's or documentary's episodes. */
+    data class Collection(val pageId: Int, val title: String) : Screen
+    /** Popular races from every season. */
+    data object Archive : Screen
 }
+
+/**
+ * One slide of home's carousel: something to watch next and why, a session to pick back up, or
+ * a weekend whose schedule is the thing to look at.
+ */
+data class Pick(val reason: String, val item: CatalogItem? = null, val weekend: WeekendInfo? = null, val resume: SavedWatch? = null)
+
+/** What's been watched of a video: when last, for how long, and whether through to the end. */
+data class Seen(val at: Long, val watchedMs: Long, val finished: Boolean)
 
 enum class AuthState { CHECKING, SIGNED_OUT, SIGNED_IN }
 
@@ -444,7 +457,12 @@ class AppState(
 
     fun open(screen: Screen) {
         backStack.add(screen)
-        if (screen is Screen.Weekend) loadWeekend(screen.weekend)
+        when (screen) {
+            is Screen.Weekend -> loadWeekend(screen.weekend)
+            is Screen.Collection -> loadCollection(screen.pageId)
+            Screen.Archive -> loadArchive()
+            else -> Unit
+        }
     }
 
     /** Returns false when there's nowhere further back to go. */
@@ -481,6 +499,8 @@ class AppState(
                 homeError = null
                 latestWeekend()?.let(::loadWeekend)
                 featuredWeekend()?.takeIf { it != latestWeekend() }?.let(::loadWeekend)
+                launch { runCatching { api.home() }.onSuccess { homePage = it } }
+                if (lastYearRaces.isEmpty()) launch { runCatching { api.raceReplays(season - 1) }.onSuccess { lastYearRaces.addAll(it) } }
             } catch (e: Exception) {
                 homeError = "Couldn't load F1 TV: ${e.message}"
             }
@@ -496,6 +516,144 @@ class AppState(
                     syncReminders()
                 }
         }
+    }
+
+    // F1 TV's catalog beyond the weekends.
+
+    /** F1 TV's home page: what it features now, and its rows of shows, documentaries and archive races. */
+    var homePage by mutableStateOf<HomePage?>(null)
+        private set
+    /** Show and documentary pages, by F1 TV page ID, fetched when opened. */
+    val collections = mutableStateMapOf<Int, CollectionPage>()
+    /** Popular races from every season, fetched when the archive page opens. */
+    var archive by mutableStateOf<List<CatalogItem>?>(null)
+        private set
+    /** Last season's race replays, for "last year's race" before a weekend. */
+    private val lastYearRaces = mutableStateListOf<CatalogItem>()
+
+    fun loadCollection(pageId: Int) {
+        scope.launch { runCatching { api.collection(pageId) }.onSuccess { collections[pageId] = it } }
+    }
+
+    fun loadArchive() {
+        if (archive != null) return
+        scope.launch { runCatching { api.archiveRaces() }.onSuccess { archive = it } }
+    }
+
+    /** Plays a catalog item; a show or documentary series opens its page of episodes instead. */
+    fun watch(item: CatalogItem) {
+        item.pageId?.let { open(Screen.Collection(it, item.title)); return }
+        // Sessions are titled by their weekend in the viewer ("Mexico City Grand Prix · Race").
+        val session = weekendContent.values.any { c -> c.sessions.any { it.contentId == item.contentId } }
+        openPicker(item.contentId, if (session && item.meeting.isNotEmpty()) "${item.meeting} · ${item.title}" else item.title, item.image)
+    }
+
+    /** This season's weekend a video belongs to, for its Weekend button. */
+    fun weekendOf(item: CatalogItem): WeekendInfo? =
+        weekends.firstOrNull { it.name == item.meeting && (item.year == 0 || item.year == season) }
+
+    // Watch history, for the suggestions.
+
+    /** What's been watched, by content ID. Kept to the most recent few hundred. */
+    val history = mutableStateMapOf<Long, Seen>().apply { putAll(readHistory()) }
+
+    private fun readHistory(): Map<Long, Seen> = runCatching {
+        val json = JSONObject(prefs.getString(PREF_HISTORY, null) ?: return emptyMap())
+        json.keys().asSequence().associate { key ->
+            val a = json.getJSONArray(key)
+            key.toLong() to Seen(a.getLong(0), a.getLong(1), a.getBoolean(2))
+        }
+    }.getOrDefault(emptyMap())
+
+    /**
+     * Notes a few more seconds of [contentId] watched. A replay counts as finished at 90%; a live
+     * session after half an hour of it, since a live race has no end to reach yet.
+     */
+    private fun noteSeen(contentId: Long, positionMs: Long, durationMs: Long, live: Boolean) {
+        val now = System.currentTimeMillis()
+        val before = history[contentId]
+        // Saves come every few seconds while watching; a longer gap was time away.
+        val gap = before?.let { now - it.at }?.takeIf { it in 0..15_000 } ?: 0
+        val watched = (before?.watchedMs ?: 0) + gap
+        val finished = before?.finished == true ||
+            (!live && durationMs > 0 && positionMs >= durationMs * 9 / 10) ||
+            (live && watched >= 30 * 60_000)
+        history[contentId] = Seen(now, watched, finished)
+        if (history.size > MAX_HISTORY) history.entries.sortedBy { it.value.at }.take(history.size - MAX_HISTORY).forEach { history.remove(it.key) }
+        val json = JSONObject()
+        history.forEach { (id, seen) -> json.put(id.toString(), JSONArray(listOf(seen.at, seen.watchedMs, seen.finished))) }
+        prefs.edit().putString(PREF_HISTORY, json.toString()).apply()
+    }
+
+    /**
+     * Home's carousel: the best things to watch next, in order. What's live; a session left
+     * part-way; after a session you watched, what follows it (the post-race show, the press
+     * conference, highlights), or the session itself if you haven't; what F1 TV features now;
+     * before the next weekend, its build-up and last year's race there, then its schedule; and
+     * one race from the archive. Anything watched to the end is left out.
+     */
+    fun suggestions(now: Long = System.currentTimeMillis()): List<Pick> {
+        val picks = mutableListOf<Pick>()
+        val used = mutableSetOf<Long>()
+        fun fresh(item: CatalogItem) = !item.upcoming && history[item.contentId]?.finished != true && item.pageId == null
+        fun add(reason: String, item: CatalogItem) {
+            if (item.contentId > 0 && fresh(item) && used.add(item.contentId)) picks += Pick(reason, item = item)
+        }
+
+        liveNow.forEach { add("Live now", it) }
+
+        recents.firstOrNull { r -> !r.live && history[r.contentId]?.let { now - it.at < 3 * DAY_MS } == true }?.let {
+            if (used.add(it.contentId)) picks += Pick("Pick up where you left off", resume = it)
+        }
+
+        val latest = latestWeekend(now)
+        val content = latest?.let { weekendContent[it.meetingKey] }
+        val last = content?.sessions?.filter { !it.upcoming && !it.live }?.maxByOrNull { it.startMs }
+        if (latest != null && content != null && last != null) {
+            val stage = last.title.lowercase()
+            if (history[last.contentId] == null) {
+                add(if (now - last.startMs < 2 * DAY_MS) "In case you missed it" else "Catch up", last)
+            } else {
+                // What follows the session you watched: its show, its press conference, its highlights.
+                fun rank(v: CatalogItem): Int {
+                    val t = "${v.title} ${v.genre}".lowercase()
+                    return when {
+                        "post-$stage" in t && "show" in t -> 0
+                        "post-$stage" in t -> 1
+                        "$stage in 30" in t || "$stage highlights" in t -> 2
+                        else -> -1
+                    }
+                }
+                val after = if ("qualifying" in stage) "After $stage" else "After the $stage"
+                content.videos.filter { rank(it) >= 0 }.sortedBy(::rank).forEach { add(after, it) }
+            }
+        }
+
+        homePage?.featured?.forEach { add("Featured on F1 TV", it) }
+
+        // The next weekend: during one, its next session; before one, its build-up.
+        val next = weekends.firstOrNull { it.isCurrent(now) && nextSession(it) != null }
+            ?: weekends.firstOrNull { it.startMs > now }
+        if (next != null) {
+            if (next.startMs - now < 7 * DAY_MS) {
+                weekendContent[next.meetingKey]?.videos?.forEach { add("Before the ${next.name}", it) }
+                lastYearRaces.firstOrNull { it.meeting == next.name }?.let { add("Last year in ${next.place}", it) }
+            }
+            val session = nextSession(next)
+            picks += Pick(
+                when {
+                    session != null && next.isCurrent(now) -> "Next: ${session.title} · ${session.subtitle}"
+                    else -> "Next race weekend · ${DAY.format(java.util.Date(next.startMs))} to ${DAY.format(java.util.Date(next.endMs))}"
+                },
+                weekend = next,
+            )
+        }
+
+        // One race from the archive, a different one each day.
+        homePage?.rows?.firstOrNull { it.tag == CatalogRow.ARCHIVE }?.items?.filter(::fresh)?.takeIf { it.isNotEmpty() }?.let { races ->
+            add("From the archive", races[(now / DAY_MS % races.size).toInt()])
+        }
+        return picks.take(MAX_PICKS)
     }
 
     // Past seasons, for the calendar.
@@ -609,6 +767,7 @@ class AppState(
         val live = player.isCurrentMediaItemLive
         val duration = player.duration.takeIf { it > 0 } ?: 0L
         val position = player.currentPosition
+        noteSeen(leader.contentId, position, duration, live)
         if (!live && duration > 0 && position > duration - 60_000) {
             clearSavedWatch()
             return
@@ -1954,6 +2113,11 @@ class AppState(
         /** The feeds' volume while a radio clip plays: silent, so the radio is clear. */
         private const val RADIO_DUCK = 0f
         private const val PREF_RECENTS = "recents"
+        private const val PREF_HISTORY = "history"
+        private const val MAX_HISTORY = 300
+        private const val MAX_PICKS = 7
+        private const val DAY_MS = 86_400_000L
+        private val DAY = java.text.SimpleDateFormat("MMM d", java.util.Locale.getDefault())
         private const val PREF_LAYOUT = "layout"
         private const val PREF_DEFAULT_LAYOUT = "defaultLayout"
         private const val PREF_SNAP = "snap"

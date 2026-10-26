@@ -39,8 +39,9 @@ private val DayFormat = SimpleDateFormat("MMM d", Locale.getDefault())
 private val SessionFormat = SimpleDateFormat("EEE, MMM d · h:mm a", Locale.getDefault())
 
 /**
- * The season at a glance: every weekend by month, finished ones dimmed, the one under way or
- * next marked, with its sessions in local time. Tap a weekend to open it.
+ * The season at a glance: every weekend by month. In the season under way, the weekends still
+ * to come sit under an Upcoming heading, the one under way or next marked, with its sessions in
+ * local time. Tap a weekend to open it.
  */
 @Composable
 fun CalendarScreen(app: AppState) {
@@ -59,11 +60,24 @@ fun CalendarScreen(app: AppState) {
     // The one under way, else the next to come: its sessions are listed under it (this season only).
     val focus = if (!current) null else weekends.firstOrNull { it.isCurrent(now) } ?: weekends.firstOrNull { it.startMs > now }
     LaunchedEffect(focus?.meetingKey) { focus?.let(app::loadWeekend) }
-    // Opens on the weekend that matters now rather than round 1.
+    // The list's rows: the finished part of the season, then (this season) the Upcoming heading
+    // and the rest, each part grouped by month. Nothing is dimmed: finished weekends are the ones
+    // there are replays of.
+    val (done, ahead) = if (current) weekends.partition { it.isDone(now) } else weekends to emptyList()
+    val rows = buildList<CalendarRow> {
+        fun months(part: List<WeekendInfo>, tag: String) = part.groupBy { MonthFormat.format(Date(it.startMs)) }.forEach { (month, inMonth) ->
+            add(CalendarRow.Month(month, "$tag$month"))
+            inMonth.forEach { add(CalendarRow.Weekend(it)) }
+        }
+        months(done, "")
+        if (ahead.isNotEmpty()) add(CalendarRow.Upcoming)
+        months(ahead, "next-")
+    }
+    // Opens on what's coming up rather than round 1.
     LaunchedEffect(weekends.size, year) {
-        val index = focus?.let { f -> weekends.indexOf(f) } ?: -1
-        // Each month heading adds an item before its weekends; close enough to land near it.
-        if (index > 2) list.scrollToItem((index + index / 3).coerceAtMost(weekends.size)) else list.scrollToItem(0)
+        val index = rows.indexOf(CalendarRow.Upcoming)
+        // +1 for the page's title item; a little of the last finished weekend stays in view.
+        if (index > 2 && !classic) list.scrollToItem(index + 1, -with(density) { 90.dp.roundToPx() }) else list.scrollToItem(0)
     }
 
     Box(Modifier.fillMaxSize().background(Ink.background)) {
@@ -87,20 +101,19 @@ fun CalendarScreen(app: AppState) {
                     group.forEach { v -> item(key = v.contentId) { VideoRow(app, v) } }
                 }
             }
-            // In the season under way, "today" sits just before the first weekend not yet over
-            // (or after the last, once the season's done). Nothing is dimmed: finished weekends
-            // are the ones there are replays of.
-            val todayBefore = if (!current) null else weekends.firstOrNull { !it.isDone(now) }?.meetingKey ?: SEASON_OVER
-            if (!classic) weekends.groupBy { MonthFormat.format(Date(it.startMs)) }.forEach { (month, inMonth) ->
-                item(key = "month-$month") {
-                    Text(month, style = Type.title2, modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 28.dp, bottom = 6.dp))
-                }
-                inMonth.forEach { w ->
-                    if (w.meetingKey == todayBefore) item(key = "today") { TodayMarker(now) }
-                    item(key = w.meetingKey) { WeekendRow(app, w, now, focus = w == focus, thisSeason = current) }
+            if (!classic) rows.forEach { row ->
+                when (row) {
+                    is CalendarRow.Month -> item(key = "month-${row.key}") {
+                        Text(row.name, style = Type.title2, modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 28.dp, bottom = 6.dp))
+                    }
+                    CalendarRow.Upcoming -> item(key = "upcoming") {
+                        Text("Upcoming", style = Type.largeTitle, modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 44.dp))
+                    }
+                    is CalendarRow.Weekend -> item(key = row.w.meetingKey) {
+                        WeekendRow(app, row.w, now, focus = row.w == focus, thisSeason = current)
+                    }
                 }
             }
-            if (!classic && todayBefore == SEASON_OVER && weekends.isNotEmpty()) item(key = "today") { TodayMarker(now) }
             item { Spacer(Modifier.height(40.dp)) }
         }
         TopBar(
@@ -272,15 +285,9 @@ private fun VideoRow(app: AppState, v: CatalogItem) {
     }
 }
 
-private const val SEASON_OVER = "season-over"
-private val TodayFormat = SimpleDateFormat("MMM d", Locale.getDefault())
-
-/** Where today falls in the season: a small red label in line with the weekends' names. */
-@Composable
-private fun TodayMarker(now: Long) {
-    Text(
-        "Today · ${TodayFormat.format(Date(now))}",
-        style = Type.footnote.copy(color = LIVE_RED),
-        modifier = Modifier.padding(start = 76.dp, top = 6.dp, bottom = 6.dp),
-    )
+/** One row of the calendar list. */
+private sealed interface CalendarRow {
+    data class Month(val name: String, val key: String) : CalendarRow
+    data object Upcoming : CalendarRow
+    data class Weekend(val w: WeekendInfo) : CalendarRow
 }

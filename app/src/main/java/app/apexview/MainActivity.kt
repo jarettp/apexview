@@ -247,6 +247,8 @@ private fun Browse(app: AppState) {
                     is Screen.Weekend -> WeekendScreen(app, screen.weekend, screen.artKey)
                     Screen.Settings -> SettingsScreen(app)
                     Screen.Calendar -> CalendarScreen(app)
+                    is Screen.Collection -> CollectionScreen(app, screen.pageId, screen.title)
+                    Screen.Archive -> ArchiveScreen(app)
                 }
             }
         }
