@@ -214,6 +214,7 @@ private fun Root(app: AppState) {
         if (!app.inPip) app.picker?.let { FeedPickerSheet(app, it) }
         // Offered while browsing, never over a stream being watched.
         if (!app.inPip && !watching) UpdatePrompt(app.updater)
+        if (!app.inPip) PlanPrompt(app)
     }
 }
 

@@ -58,6 +58,9 @@ class FeedPlayer(
     private var lastDropped = 0
     private var dropsPerSecond = 0
     @Volatile private var error: String? = null
+    /** Why this feed isn't playing, in plain words, for the tile to show. Null while it's fine. */
+    var problem by mutableStateOf<String?>(null)
+        private set
 
     // Written on the playback thread when the DRM session opens.
     @Volatile private var drmLevel = ""
@@ -117,7 +120,12 @@ class FeedPlayer(
 
             override fun onPlayerError(e: PlaybackException) {
                 error = "${e.errorCodeName}: ${describe(e)}"
+                problem = explain(e)
                 refresh()
+            }
+
+            override fun onIsPlayingChanged(isPlaying: Boolean) {
+                if (isPlaying) problem = null
             }
 
             override fun onVideoSizeChanged(videoSize: VideoSize) {
@@ -200,6 +208,19 @@ class FeedPlayer(
     }
 
     fun release() = player.release()
+
+    /**
+     * What a playback error means for the viewer. F1 refusing the licence or the stream is almost
+     * always the account's plan not covering it; anything else gets F1's own error name.
+     */
+    private fun explain(e: PlaybackException): String {
+        val code = generateSequence(e as Throwable) { it.cause }
+            .firstNotNullOfOrNull { it as? HttpDataSource.InvalidResponseCodeException }?.responseCode
+        val refused = code == 401 || code == 403 ||
+            e.errorCode in PlaybackException.ERROR_CODE_DRM_UNSPECIFIED..PlaybackException.ERROR_CODE_DRM_LICENSE_EXPIRED
+        return if (refused) "F1 TV won't play this on your account. Its plan may not include this session."
+        else "This feed stopped: ${e.errorCodeName.removePrefix("ERROR_CODE_").lowercase().replace('_', ' ')}."
+    }
 
     private fun describe(e: PlaybackException): String {
         val chain = generateSequence(e as Throwable) { it.cause }.toList()

@@ -310,3 +310,40 @@ fun SettingsScreen(app: AppState) {
     )
     }
 }
+
+/**
+ * Shown when the account signed in has no F1 TV plan with video, so nothing would play. Says
+ * why, including the Apple TV case in the US, and offers to sign in with another account.
+ */
+@Composable
+fun PlanPrompt(app: AppState) {
+    if (!app.planPromptOpen) return
+    androidx.compose.ui.window.Dialog(onDismissRequest = { app.closePlanPrompt(false) }) {
+        Column(
+            Modifier
+                .widthIn(max = 460.dp)
+                .clip(androidx.compose.foundation.shape.RoundedCornerShape(24.dp))
+                .background(Ink.surface)
+                .padding(24.dp)
+        ) {
+            Text("This account can't play video", style = Type.title2)
+            Text(
+                "You're signed in, but this F1 TV account doesn't have a plan that includes video, so F1 won't stream anything to it.",
+                style = Type.subhead,
+                modifier = Modifier.padding(top = 8.dp),
+            )
+            Text(
+                "In the US, F1 TV Premium through Apple TV isn't attached to your F1 TV account, and Apexview can't use Apple's streams. Apexview needs a Pro or Premium plan bought directly from F1 TV.",
+                style = Type.subhead,
+                modifier = Modifier.padding(top = 10.dp),
+            )
+            Row(
+                Modifier.fillMaxWidth().padding(top = 20.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.End),
+            ) {
+                SecondaryButton("Use another account") { app.closePlanPrompt(true) }
+                PrimaryButton("OK") { app.closePlanPrompt(false) }
+            }
+        }
+    }
+}

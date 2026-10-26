@@ -423,6 +423,7 @@ class AppState(
                 api.platform = settings.platform
                 api.login(token)
                 tier = api.tier
+                planPromptOpen = !hasVideoPlan
                 auth = AuthState.SIGNED_IN
                 message = null
                 loadHome()
@@ -433,6 +434,20 @@ class AppState(
                 busy = false
             }
         }
+    }
+
+    /**
+     * Whether the signed-in account's F1 TV plan includes video. A free account (REG) signs in
+     * fine but gets nothing to play. In the US, Premium bought through Apple TV leaves the F1 TV
+     * account on REG, and Apple's streams are their own service.
+     */
+    val hasVideoPlan get() = tier.isNotEmpty() && tier !in NO_VIDEO_TIERS
+    /** Explains an account without video, once at sign-in and again if a stream is refused. */
+    var planPromptOpen by mutableStateOf(false)
+
+    fun closePlanPrompt(signOutToo: Boolean) {
+        planPromptOpen = false
+        if (signOutToo) signOut()
     }
 
     fun signOut() {
@@ -908,7 +923,10 @@ class AppState(
                 }
             }
             if (streams.isEmpty()) {
-                message = "No feed would start.\n" + failures.joinToString("\n")
+                if (!hasVideoPlan) {
+                    planPromptOpen = true
+                    message = null
+                } else message = "No feed would start.\n" + failures.joinToString("\n")
                 return@task
             }
 
@@ -2118,6 +2136,7 @@ class AppState(
         private const val RADIO_DUCK = 0f
         private const val PREF_RECENTS = "recents"
         private const val PREF_HISTORY = "history"
+        private val NO_VIDEO_TIERS = setOf("ANONYMOUS", "REG")
         private const val MAX_HISTORY = 300
         private const val MAX_PICKS = 7
         private const val DAY_MS = 86_400_000L

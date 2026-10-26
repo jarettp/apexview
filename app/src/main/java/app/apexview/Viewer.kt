@@ -641,6 +641,14 @@ private fun TileView(app: AppState, tile: Tile) {
             }
         }
 
+        tile.feed.problem?.let { problem ->
+            Text(
+                problem,
+                style = Type.subhead.copy(color = Ink.primary, shadow = overlayShadow, textAlign = androidx.compose.ui.text.style.TextAlign.Center),
+                modifier = Modifier.align(Alignment.Center).padding(horizontal = 24.dp).widthIn(max = 420.dp),
+            )
+        }
+
         if (app.settings.showStats) {
             Text(
                 tile.feed.status,

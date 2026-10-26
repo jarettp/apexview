@@ -43,6 +43,10 @@ Tap the **?** in the viewer's top bar for a guide to every gesture.
 2. Open it on your phone and allow installing from that source when Android asks.
 3. Sign in with your F1 TV account.
 
+You need an F1 TV Pro or Premium plan bought directly from F1 TV. A free F1 TV account can't
+play video. In the US, F1 TV Premium through Apple TV isn't attached to your F1 TV account, so
+Apexview can't play it.
+
 Android 10 or newer.
 
 Apexview checks for a new release once a day when it opens and offers to update itself (Android asks you to confirm the install, and the first time, to allow Apexview to install updates). Settings has a Check for updates button too. A fork can point its updates at its own releases with `UPDATE_REPO` in `app/build.gradle.kts`.
