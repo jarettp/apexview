@@ -40,6 +40,52 @@ class RadioClip(val utc: Long, val number: String, val path: String)
 /** A numbered corner, in archive coordinates. */
 class Corner(val number: Int, val x: Float, val y: Float)
 
+/** A circuit from MultiViewer: its outline, numbered corners, and where each marshal sector starts. */
+class Circuit(val outline: FloatArray, val corners: List<Corner>, val sectors: List<Corner>)
+
+/** A yellow (level 1), double yellow (2) or clear (0) in one marshal sector. Sector 0 is "track clear". */
+class SectorFlag(val utc: Long, val sector: Int, val level: Int)
+
+/** What the whole track is under, with the words the map shows for it. */
+enum class TrackCondition(val label: String?) {
+    CLEAR(null), SAFETY_CAR("Safety car"), VSC("Virtual safety car"), VSC_ENDING("VSC ending"), RED("Red flag"),
+}
+
+/** The flags at one moment: the whole track's condition, and the yellow sectors (number to level). */
+class FlagPicture(val track: TrackCondition, val yellow: Map<Int, Int>)
+
+/**
+ * Race control's flags through a session: sector yellows from its messages, and the whole track's
+ * condition from F1's track status (4 safety car, 5 red, 6 VSC, 7 VSC ending). Both oldest first.
+ */
+class TrackFlags(val sectors: List<SectorFlag>, val status: List<Pair<Long, Int>>) {
+    fun at(t: Long): FlagPicture {
+        var code = 1
+        for ((utc, c) in status) if (utc <= t) code = c else break
+        val track = when (code) {
+            4 -> TrackCondition.SAFETY_CAR
+            5 -> TrackCondition.RED
+            6 -> TrackCondition.VSC
+            7 -> TrackCondition.VSC_ENDING
+            else -> TrackCondition.CLEAR
+        }
+        val yellow = HashMap<Int, Int>()
+        for (f in sectors) {
+            if (f.utc > t) break
+            when {
+                f.sector == 0 -> yellow.clear()
+                f.level == 0 -> yellow.remove(f.sector)
+                else -> yellow[f.sector] = f.level
+            }
+        }
+        return FlagPicture(track, yellow)
+    }
+
+    companion object {
+        val NONE = TrackFlags(emptyList(), emptyList())
+    }
+}
+
 /**
  * The circuit as a closed loop, with distance along it. [progress] turns a car's position into
  * how far round the lap it is (0..1), measured from the loop's first point.
@@ -193,6 +239,9 @@ class SessionTiming(
     val tyres: Map<String, TyreLog> = emptyMap(),
     /** Where the session's files live; a clip's address is this plus its path. Public, no login. */
     val radioBase: String = "",
+    /** Where each marshal sector starts, for yellow flags in one sector. */
+    val marshalSectors: List<Corner> = emptyList(),
+    val flags: TrackFlags = TrackFlags.NONE,
 ) {
     val geometry = TrackGeometry(outline)
 
@@ -237,11 +286,17 @@ class LiveTimingArchive(private val token: String, private val userAgent: String
         val traced = traceOutline(tracks.values.toList())
         val line = findStartFinish(traced, parsed.crossings, built)
         val outline = if (line != null) startAt(traced, line) else traced
-        // Turn numbers are a nice extra from a third party; the map works without them.
-        val corners = ref.circuitKey?.let { runCatching { fetchCorners(it, ref.year) }.getOrNull() }.orEmpty()
+        // Turn numbers and marshal sectors are a nice extra from a third party; the map works without them.
+        val circuit = ref.circuitKey?.let { runCatching { fetchCircuit(it, ref.year) }.getOrNull() }
+        val corners = circuit?.corners.orEmpty()
 
         val started = runCatching { parseSessionStarted(fetch(path + "SessionStatus.jsonStream"), streamStart) }.getOrNull()
-        val chequered = runCatching { parseChequered(fetch(path + "RaceControlMessages.jsonStream"), streamStart) }.getOrNull()
+        val control = runCatching { fetch(path + "RaceControlMessages.jsonStream") }.getOrNull()
+        val chequered = control?.let { runCatching { parseChequered(it, streamStart) }.getOrNull() }
+        val flags = TrackFlags(
+            control?.let { runCatching { parseSectorFlags(it, streamStart) }.getOrNull() }.orEmpty(),
+            runCatching { parseTrackStatus(fetch(path + "TrackStatus.jsonStream"), streamStart) }.getOrDefault(emptyList()),
+        )
         val tyres = runCatching { TyreParser.parse(fetch(path + "TimingAppData.jsonStream"), streamStart) }.getOrDefault(emptyMap())
         val radio = runCatching { parseRadio(fetch(path + "TeamRadio.jsonStream")) }
             .onSuccess { android.util.Log.i("ApexviewRadio", "archive radio for $path: ${it.size} clips") }
@@ -266,6 +321,8 @@ class LiveTimingArchive(private val token: String, private val userAgent: String
             radio = radio,
             radioBase = BASE + path,
             tyres = tyres,
+            marshalSectors = circuit?.sectors.orEmpty(),
+            flags = flags,
         ).also { it.startLine = grid?.startLine }
     }
 
@@ -304,9 +361,9 @@ class LiveTimingArchive(private val token: String, private val userAgent: String
         return null
     }
 
-    /** The last chequered flag in race control's messages. */
-    internal fun parseChequered(stream: String, streamStart: Long): Long? {
-        var last: Long? = null
+    /** Race control's messages, each with its time (UTC ms), oldest first. */
+    private fun controlMessages(stream: String, streamStart: Long): List<Pair<JSONObject, Long>> {
+        val out = mutableListOf<Pair<JSONObject, Long>>()
         stream.lineSequence().forEach { line ->
             if (line.length <= TS_LENGTH) return@forEach
             val messages = runCatching { JSONObject(line.substring(TS_LENGTH)).opt("Messages") }.getOrNull() ?: return@forEach
@@ -315,14 +372,46 @@ class LiveTimingArchive(private val token: String, private val userAgent: String
                 is JSONObject -> messages.keys().asSequence().mapNotNull { messages.optJSONObject(it) }.toList()
                 else -> emptyList()
             }
-            list.filter { it.optString("Flag") == "CHEQUERED" }.forEach { m ->
+            list.forEach { m ->
                 // Utc comes with or without a zone; without one it's UTC anyway.
                 val utc = m.optString("Utc").let { if (it.isNotEmpty() && !it.endsWith("Z")) it + "Z" else it }
-                last = runCatching { Instant.parse(utc).toEpochMilli() }.getOrNull() ?: (streamStart + offsetMs(line))
+                out += m to (runCatching { Instant.parse(utc).toEpochMilli() }.getOrNull() ?: (streamStart + offsetMs(line)))
             }
         }
-        return last
+        return out
     }
+
+    /** The last chequered flag in race control's messages. */
+    internal fun parseChequered(stream: String, streamStart: Long): Long? =
+        controlMessages(stream, streamStart).lastOrNull { it.first.optString("Flag") == "CHEQUERED" }?.second
+
+    /**
+     * Yellows and clears in single marshal sectors ("DOUBLE YELLOW IN TRACK SECTOR 10"), and
+     * "TRACK CLEAR", which clears them all.
+     */
+    internal fun parseSectorFlags(stream: String, streamStart: Long): List<SectorFlag> =
+        controlMessages(stream, streamStart).mapNotNull { (m, utc) ->
+            val scope = m.optString("Scope")
+            when (m.optString("Flag")) {
+                "YELLOW" -> m.optInt("Sector", 0).takeIf { scope == "Sector" && it > 0 }?.let { SectorFlag(utc, it, 1) }
+                "DOUBLE YELLOW" -> m.optInt("Sector", 0).takeIf { scope == "Sector" && it > 0 }?.let { SectorFlag(utc, it, 2) }
+                "CLEAR", "GREEN" -> when (scope) {
+                    "Sector" -> m.optInt("Sector", 0).takeIf { it > 0 }?.let { SectorFlag(utc, it, 0) }
+                    "Track" -> SectorFlag(utc, 0, 0)
+                    else -> null
+                }
+                else -> null
+            }
+        }.sortedBy { it.utc }
+
+    /** TrackStatus.jsonStream: the whole track's status code as it changes. */
+    internal fun parseTrackStatus(stream: String, streamStart: Long): List<Pair<Long, Int>> =
+        stream.lineSequence().mapNotNull { line ->
+            if (line.length <= TS_LENGTH) return@mapNotNull null
+            val code = runCatching { JSONObject(line.substring(TS_LENGTH)).optString("Status").toInt() }.getOrNull()
+                ?: return@mapNotNull null
+            streamStart + offsetMs(line) to code
+        }.toList()
 
     internal class Grid(val startLine: Float, val lightsOutUtc: Long)
 
@@ -408,17 +497,12 @@ class LiveTimingArchive(private val token: String, private val userAgent: String
     }
 
     /**
-     * Corner numbers from MultiViewer's public circuit data, which uses the same coordinates as
-     * F1's position feed. Sent without the F1 token: it's a third party.
+     * The circuit's outline (x0,y0,x1,y1,...), numbered corners and marshal sectors, from
+     * MultiViewer's public circuit data, which uses the same coordinates as F1's position feed.
+     * Sent without the F1 token: it's a third party. The outline doesn't start at the line; a
+     * live session needs it before any car has done a lap to trace one from.
      */
-    internal fun fetchCorners(circuitKey: Int, year: Int): List<Corner> = fetchCircuit(circuitKey, year)?.second.orEmpty()
-
-    /**
-     * The circuit's outline (x0,y0,x1,y1,...) and its numbered corners, from the same source.
-     * The outline doesn't start at the line; a live session needs it before any car has done a
-     * lap to trace one from.
-     */
-    internal fun fetchCircuit(circuitKey: Int, year: Int): Pair<FloatArray, List<Corner>>? {
+    internal fun fetchCircuit(circuitKey: Int, year: Int): Circuit? {
         val conn = URL("https://api.multiviewer.app/api/v1/circuits/$circuitKey/$year").openConnection() as HttpURLConnection
         try {
             conn.connectTimeout = 10_000
@@ -431,13 +515,15 @@ class LiveTimingArchive(private val token: String, private val userAgent: String
             val outline = if (xs != null && ys != null && xs.length() == ys.length()) {
                 FloatArray(xs.length() * 2) { i -> (if (i % 2 == 0) xs else ys).optDouble(i / 2).toFloat() }
             } else FloatArray(0)
-            val list = json.optJSONArray("corners")
-            val corners = if (list == null) emptyList() else (0 until list.length()).mapNotNull { i ->
-                val c = list.getJSONObject(i)
-                val p = c.optJSONObject("trackPosition") ?: return@mapNotNull null
-                Corner(c.optInt("number"), p.optDouble("x").toFloat(), p.optDouble("y").toFloat())
+            fun points(key: String): List<Corner> {
+                val list = json.optJSONArray(key) ?: return emptyList()
+                return (0 until list.length()).mapNotNull { i ->
+                    val c = list.getJSONObject(i)
+                    val p = c.optJSONObject("trackPosition") ?: return@mapNotNull null
+                    Corner(c.optInt("number"), p.optDouble("x").toFloat(), p.optDouble("y").toFloat())
+                }
             }
-            return outline to corners
+            return Circuit(outline, points("corners"), points("marshalSectors"))
         } finally {
             conn.disconnect()
         }

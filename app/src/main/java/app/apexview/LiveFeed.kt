@@ -79,6 +79,8 @@ class LiveTimingFeed(
     private var traced: SavedOutline? = saved
     private var tracedAt = 0L
     private var corners: List<Corner>? = null
+    private var sectors: List<Corner> = emptyList()
+    private val trackStatusLines = StringBuilder()
     /** The published circuit shape, used until a lap with its finish line is traced. */
     private var circuitOutline: FloatArray? = null
     private val topicCounts = mutableMapOf<String, Int>()
@@ -109,9 +111,10 @@ class LiveTimingFeed(
         // lap since connecting. A traced lap from an earlier session (with its finish line) wins.
         if (corners == null) launch(Dispatchers.IO) {
             val circuit = ref.circuitKey?.let { runCatching { archive.fetchCircuit(it, ref.year) }.getOrNull() }
-            corners = circuit?.second.orEmpty()
-            circuit?.first?.takeIf { it.size >= 8 }?.let { synchronized(this@LiveTimingFeed) { circuitOutline = it } }
-            Log.i(TAG, "circuit ${ref.circuitKey}: ${circuit?.first?.size?.div(2)} outline points, ${corners?.size} corners")
+            corners = circuit?.corners.orEmpty()
+            sectors = circuit?.sectors.orEmpty()
+            circuit?.outline?.takeIf { it.size >= 8 }?.let { synchronized(this@LiveTimingFeed) { circuitOutline = it } }
+            Log.i(TAG, "circuit ${ref.circuitKey}: ${circuit?.outline?.size?.div(2)} outline points, ${corners?.size} corners")
         }
         while (true) {
             try {
@@ -238,6 +241,7 @@ class LiveTimingFeed(
             "TimingAppData" -> append(tyreLines, start, utc, data)
             "SessionStatus" -> append(statusLines, start, utc, data)
             "RaceControlMessages" -> append(controlLines, start, utc, data)
+            "TrackStatus" -> append(trackStatusLines, start, utc, data)
         }
     }
 
@@ -299,6 +303,11 @@ class LiveTimingFeed(
             circuitKey = ref.circuitKey,
             startedUtc = runCatching { archive.parseSessionStarted(status, start) }.getOrNull(),
             finishedUtc = runCatching { archive.parseChequered(controlLines.toString(), start) }.getOrNull(),
+            marshalSectors = sectors,
+            flags = TrackFlags(
+                runCatching { archive.parseSectorFlags(controlLines.toString(), start) }.getOrDefault(emptyList()),
+                runCatching { archive.parseTrackStatus(trackStatusLines.toString(), start) }.getOrDefault(emptyList()),
+            ),
             laps = laps,
             radio = radio.sortedBy { it.utc },
             radioBase = LiveTimingArchive.BASE + sessionPath,
@@ -312,7 +321,7 @@ class LiveTimingFeed(
         private const val RS = "\u001e"
         private val TOPICS = listOf(
             "Heartbeat", "Position.z", "TimingData", "DriverList", "SessionInfo", "SessionStatus", "RaceControlMessages",
-            "TeamRadio", "TimingAppData",
+            "TeamRadio", "TimingAppData", "TrackStatus",
         )
         private const val REFRESH_MS = 2_000L
         // Lap states and timing cards are re-read every 10 s: the picture runs far enough behind

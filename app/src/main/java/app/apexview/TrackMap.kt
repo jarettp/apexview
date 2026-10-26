@@ -374,13 +374,18 @@ private fun TrackDrawing(app: AppState, timing: SessionTiming, width: Float, hei
     val marks = remember(timing, timing.startLine) { LineMarks(timing) }
     val finishLabel = remember(marks) { measurer.label(marks.finishLabel, 8.sp) }
     val startLabel = remember { measurer.label("START", 8.sp) }
+    val sectors = remember(fit) { sectorPaths(timing) { f -> timing.geometry.pointAt(f).let { g -> fit.map(g[0], g[1]) } } }
+    val conditions = rememberConditionLabels(measurer)
 
     val now = rememberMapTime(app)
     val cars = carsAt(timing, now).map { it to fit.map(it.x, it.y) }
+    val flags = timing.flags.at(now)
 
     Canvas(Modifier.fillMaxSize().graphicsLayer(alpha = app.mapOpacity)) {
         drawPath(path, Color.Black.copy(alpha = 0.45f), style = Stroke(7.dp.toPx()))
         drawPath(path, Color.White.copy(alpha = 0.6f), style = Stroke(3.dp.toPx()))
+        drawFlags(flags, path, sectors, 3.5.dp.toPx())
+        drawCondition(flags, conditions, width / 2, height - 4.dp.toPx())
         val center = Offset(width / 2, height / 2)
 
         fun mark(f: Float, chequered: Boolean, label: TextLayoutResult) {
@@ -413,6 +418,61 @@ private fun TrackDrawing(app: AppState, timing: SessionTiming, width: Float, hei
         }
     }
     CarTargets(app, cars.map { (car, p) -> car.number to p })
+}
+
+private val FlagYellow = Color(0xFFFFD60A)
+private val FlagRed = Color(0xFFFF3B30)
+
+/**
+ * Each marshal sector's stretch of the lap as a path, keyed by sector number. [point] places a
+ * lap fraction on screen; a sector runs from its own start to the next one's.
+ */
+private fun sectorPaths(timing: SessionTiming, point: (Float) -> Offset): Map<Int, Path> {
+    val starts = timing.marshalSectors.sortedBy { it.number }.map { it.number to timing.geometry.progress(it.x, it.y) }
+    if (starts.size < 2) return emptyMap()
+    return starts.mapIndexed { i, (number, from) ->
+        var to = starts[(i + 1) % starts.size].second
+        if (to <= from) to += 1f
+        val steps = ((to - from) * 400).toInt().coerceAtLeast(6)
+        number to Path().apply {
+            for (k in 0..steps) {
+                val p = point(from + (to - from) * k / steps)
+                if (k == 0) moveTo(p.x, p.y) else lineTo(p.x, p.y)
+            }
+        }
+    }.toMap()
+}
+
+/**
+ * Race control's flags over the drawn track: all of it red under a red flag, yellow under the
+ * safety car or VSC, otherwise just the yellow sectors (double yellows thicker).
+ */
+private fun DrawScope.drawFlags(flags: FlagPicture, whole: Path, sectors: Map<Int, Path>, width: Float) {
+    when (flags.track) {
+        TrackCondition.RED -> drawPath(whole, FlagRed, style = Stroke(width))
+        TrackCondition.CLEAR -> flags.yellow.forEach { (sector, level) ->
+            sectors[sector]?.let {
+                drawPath(it, FlagYellow, style = Stroke(if (level >= 2) width * 1.6f else width, cap = androidx.compose.ui.graphics.StrokeCap.Round))
+            }
+        }
+        else -> drawPath(whole, FlagYellow, style = Stroke(width))
+    }
+}
+
+/** "Red flag", "Safety car" and the like, centred on [x] with its foot at [bottom]. */
+private fun DrawScope.drawCondition(flags: FlagPicture, labels: Map<TrackCondition, TextLayoutResult>, x: Float, bottom: Float) {
+    val label = labels[flags.track] ?: return
+    drawText(
+        label,
+        color = if (flags.track == TrackCondition.RED) FlagRed else FlagYellow,
+        topLeft = Offset(x - label.size.width / 2f, bottom - label.size.height),
+        shadow = androidx.compose.ui.graphics.Shadow(Color.Black.copy(alpha = 0.8f), blurRadius = 8f),
+    )
+}
+
+@Composable
+private fun rememberConditionLabels(measurer: androidx.compose.ui.text.TextMeasurer) = remember {
+    TrackCondition.entries.mapNotNull { c -> c.label?.let { c to measurer.label(it, 15.sp) } }.toMap()
 }
 
 private fun outward(p: Offset, center: Offset): Offset {
@@ -500,16 +560,22 @@ fun EdgeMap(app: AppState, timing: SessionTiming, width: Float, height: Float, i
     val marks = remember(timing, timing.startLine) { LineMarks(timing) }
     val finishLabel = remember(marks) { measurer.label(marks.finishLabel, 8.sp) }
     val startLabel = remember { measurer.label("START", 8.sp) }
+    val sectors = remember(ribbon, timing) { sectorPaths(timing, ribbon::point) }
+    val conditions = rememberConditionLabels(measurer)
 
     val now = rememberMapTime(app)
     val cars = carsAt(timing, now)
         .map { car -> car to timing.geometry.progress(car.x, car.y) }
         .sortedBy { it.second }
+    val flags = timing.flags.at(now)
 
     Canvas(Modifier.fillMaxSize().graphicsLayer(alpha = app.mapOpacity)) {
         val line = ribbon.path()
         drawPath(line, Color.Black.copy(alpha = 0.5f), style = Stroke(6.dp.toPx()))
         drawPath(line, Color.White.copy(alpha = 0.5f), style = Stroke(2.dp.toPx()))
+        drawFlags(flags, line, sectors, 2.5.dp.toPx())
+        // Above the bottom of the loop, clear of the car names that sit inside it.
+        drawCondition(flags, conditions, width / 2, height - inset / 2 - 56.dp.toPx())
 
         fun tick(f: Float, length: Float, stroke: Float) {
             val p = ribbon.point(f)
