@@ -246,6 +246,7 @@ private fun Browse(app: AppState) {
                     Screen.Home -> HomeScreen(app)
                     is Screen.Weekend -> WeekendScreen(app, screen.weekend, screen.artKey)
                     Screen.Settings -> SettingsScreen(app)
+                    Screen.Calendar -> CalendarScreen(app)
                 }
             }
         }

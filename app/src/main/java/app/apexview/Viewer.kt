@@ -281,6 +281,10 @@ fun ViewerScreen(app: AppState) {
                         .requiredSize(with(density) { width.toDp() }, with(density) { (height - top).coerceAtLeast(0f).toDp() }),
                 )
             }
+            // The feeds' headers, above the map so its cars never cover a speaker or a menu.
+            Box(Modifier.fillMaxSize().zIndex(1.5e9f)) {
+                app.tiles.forEach { tile -> key(tile.id) { TileHeader(app, tile) } }
+            }
             // Above every tile (their z grows by one per touch), below the controls.
             app.timing?.let { timing ->
                 AnimatedVisibility(!laptop, Modifier.fillMaxSize().zIndex(1e9f), enter = fadeIn(swap), exit = fadeOut(swap)) {
@@ -612,39 +616,6 @@ private fun TileView(app: AppState, tile: Tile) {
         }
 
         val fade = tween<Float>(Motion.SCREEN_MS, easing = EaseOut)
-        AnimatedVisibility(app.chromeVisible, Modifier.align(Alignment.TopStart).fillMaxWidth(), enter = fadeIn(fade), exit = fadeOut(fade)) {
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .background(Brush.verticalGradient(0f to Color.Black.copy(alpha = 0.6f), 1f to Color.Transparent))
-                    .padding(start = 10.dp, end = 2.dp, top = 2.dp, bottom = 10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Row(
-                    Modifier.weight(1f, fill = false).pressable { app.openTileMenu(tile); app.showChrome() }.padding(vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    tile.channel.teamColor?.let {
-                        Box(Modifier.size(8.dp).clip(CircleShape).background(Color(it)))
-                        Spacer(Modifier.width(6.dp))
-                    }
-                    Text(tile.channel.title, style = Type.footnote.copy(color = Ink.primary, shadow = overlayShadow), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Icon(Icons.Rounded.KeyboardArrowDown, null, tint = Ink.primary, modifier = Modifier.size(18.dp))
-                    if (tile.pinned) Icon(Icons.Rounded.PushPin, "Pinned", tint = Ink.primary, modifier = Modifier.padding(start = 4.dp).size(14.dp))
-                }
-                Spacer(Modifier.weight(1f))
-                val hearing = tile.audible && !app.mutedAll
-                Glyph(if (hearing) Icons.Rounded.VolumeUp else Icons.Rounded.VolumeOff, if (hearing) "Playing audio" else "Play audio from this feed", 20) {
-                    app.setAudio(tile, byUser = true)
-                    app.showChrome()
-                }
-                // The small feeds close from here; the rest close up to fill the space.
-                if (app.tiles.size > 1 && !app.isMainTile(tile)) {
-                    Glyph(Icons.Rounded.Close, "Close ${tile.channel.title}", 18) { app.remove(tile) }
-                }
-            }
-        }
-
         AnimatedVisibility(
             app.audioHint === tile,
             Modifier.align(Alignment.BottomEnd).padding(end = 52.dp, bottom = 10.dp),
@@ -759,6 +730,75 @@ private fun TargetGlow(on: Boolean) {
     }
 }
 
+/**
+ * A feed's header (its name for the menu, the speaker, and on small feeds a close), drawn from a
+ * layer above the track map: the edge ribbon runs across the top of the screen, and its cars'
+ * tap targets used to sit over the main feed's speaker.
+ */
+@Composable
+private fun TileHeader(app: AppState, tile: Tile) {
+    val density = LocalDensity.current
+    val fade = tween<Float>(Motion.SCREEN_MS, easing = EaseOut)
+    Box(
+        Modifier
+            .offset { IntOffset(tile.x.roundToInt(), tile.y.roundToInt()) }
+            .width(with(density) { tile.w.toDp() })
+            .zIndex(tile.z)
+    ) {
+        AnimatedVisibility(app.chromeVisible, Modifier.fillMaxWidth(), enter = fadeIn(fade), exit = fadeOut(fade)) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .background(Brush.verticalGradient(0f to Color.Black.copy(alpha = 0.6f), 1f to Color.Transparent))
+                    .padding(start = 10.dp, end = 2.dp, top = 2.dp, bottom = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Row(
+                    Modifier.weight(1f, fill = false).pressable { app.openTileMenu(tile); app.showChrome() }.padding(vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    tile.channel.teamColor?.let {
+                        Box(Modifier.size(8.dp).clip(CircleShape).background(Color(it)))
+                        Spacer(Modifier.width(6.dp))
+                    }
+                    Text(tile.channel.title, style = Type.footnote.copy(color = Ink.primary, shadow = overlayShadow), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Icon(Icons.Rounded.KeyboardArrowDown, null, tint = Ink.primary, modifier = Modifier.size(18.dp))
+                    if (tile.pinned) Icon(Icons.Rounded.PushPin, "Pinned", tint = Ink.primary, modifier = Modifier.padding(start = 4.dp).size(14.dp))
+                }
+                Spacer(Modifier.weight(1f))
+                val hearing = tile.audible && !app.mutedAll
+                Glyph(if (hearing) Icons.Rounded.VolumeUp else Icons.Rounded.VolumeOff, if (hearing) "Playing audio" else "Play audio from this feed", 20) {
+                    app.setAudio(tile, byUser = true)
+                    app.showChrome()
+                }
+                // The small feeds close from here; the rest close up to fill the space.
+                if (app.tiles.size > 1 && !app.isMainTile(tile)) {
+                    Glyph(Icons.Rounded.Close, "Close ${tile.channel.title}", 18) { app.remove(tile) }
+                }
+            }
+        }
+    }
+}
+
+/** One feed to switch to, by name; "Now" on the one playing. */
+@Composable
+private fun ChannelRow(app: AppState, tile: Tile, channel: Channel) {
+    val current = channel == tile.channel
+    Row(
+        Modifier.fillMaxWidth().pressable(scaleTo = 0.99f) { app.switchFeed(tile, channel) }.padding(vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.size(10.dp).clip(CircleShape).background(channel.teamColor?.let { Color(it) } ?: Color.Transparent))
+        Spacer(Modifier.width(12.dp))
+        Text(
+            channel.title,
+            style = Type.body.copy(color = if (current) Ink.secondary else Ink.primary),
+            modifier = Modifier.weight(1f),
+        )
+        if (current) Text("Now", style = Type.footnote)
+    }
+}
+
 /** A tile's actions and its session's other feeds. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -778,22 +818,30 @@ private fun TileMenuSheet(app: AppState, tile: Tile) {
                 SecondaryButton("Remove") { app.remove(tile) }
             }
             Text("Switch to", style = Type.headline, modifier = Modifier.padding(top = 4.dp, bottom = 4.dp))
-            app.channelsFor(tile).forEach { channel ->
-                val current = channel == tile.channel
-                Row(
-                    Modifier.fillMaxWidth().pressable(scaleTo = 0.99f) { app.switchFeed(tile, channel) }.padding(vertical = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Box(Modifier.size(10.dp).clip(CircleShape).background(channel.teamColor?.let { Color(it) } ?: Color.Transparent))
-                    Spacer(Modifier.width(12.dp))
-                    Text(
-                        channel.title,
-                        style = Type.body.copy(color = if (current) Ink.secondary else Ink.primary),
-                        modifier = Modifier.weight(1f),
-                    )
-                    if (current) Text("Now", style = Type.footnote)
+            // Broadcast feeds as they come; onboards in running order with the tower's stats,
+            // when there's timing for the session. Any without timing follow in F1's order.
+            val timing = app.timing
+            val now = remember { app.mapTimeMs() ?: 0L }
+            val channels = app.channelsFor(tile)
+            val onboards = channels.filter { it.racingNumber != null }
+            val ranked = if (timing == null) emptyList() else onboards.mapNotNull { c ->
+                val number = c.racingNumber.toString()
+                timing.laps[number]?.at(now)?.let { Triple(c, number, it) }
+            }.sortedBy { it.third.position ?: 99 }
+            val plain = channels.filter { c -> ranked.none { it.first == c } }
+            plain.filter { it.racingNumber == null }.forEach { channel ->
+                ChannelRow(app, tile, channel)
+            }
+            if (timing != null && ranked.isNotEmpty()) {
+                Spacer(Modifier.height(10.dp))
+                TowerHeader(timing)
+                ranked.forEach { (channel, number, state) ->
+                    TowerRow(timing, number, state, timing.tyres[number]?.at(now), highlight = channel == tile.channel) {
+                        app.switchFeed(tile, channel)
+                    }
                 }
             }
+            plain.filter { it.racingNumber != null }.forEach { channel -> ChannelRow(app, tile, channel) }
             Spacer(Modifier.height(20.dp))
         }
     }

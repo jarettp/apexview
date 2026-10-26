@@ -123,6 +123,7 @@ sealed interface Screen {
     /** [artKey] names the card or hero it was opened from, whose artwork grows into the page's. */
     data class Weekend(val weekend: WeekendInfo, val artKey: String? = null) : Screen
     data object Settings : Screen
+    data object Calendar : Screen
 }
 
 enum class AuthState { CHECKING, SIGNED_OUT, SIGNED_IN }
@@ -486,8 +487,41 @@ class AppState(
     fun loadWeekend(weekend: WeekendInfo) {
         scope.launch {
             runCatching { api.weekend(weekend) }
-                .onSuccess { weekendContent[weekend.meetingKey] = it }
+                .onSuccess {
+                    weekendContent[weekend.meetingKey] = it
+                    syncReminders()
+                }
         }
+    }
+
+    // Session reminders.
+
+    var remindersOn by mutableStateOf(Reminders.enabled(context))
+        private set
+    var remindersMainOnly by mutableStateOf(Reminders.mainOnly(context))
+        private set
+
+    fun chooseReminders(on: Boolean) {
+        remindersOn = on
+        Reminders.setEnabled(context, on)
+        syncReminders()
+    }
+
+    fun chooseRemindersMainOnly(only: Boolean) {
+        remindersMainOnly = only
+        Reminders.setMainOnly(context, only)
+        syncReminders()
+    }
+
+    /** Sets reminders for every upcoming session the app knows the time of (the weekends loaded). */
+    private fun syncReminders() {
+        val now = System.currentTimeMillis()
+        val sessions = weekends.filter { !it.isDone(now) }.flatMap { w ->
+            weekendContent[w.meetingKey]?.sessions.orEmpty()
+                .filter { it.startMs > now }
+                .map { Reminders.Session(it.contentId, w.name, it.title, it.startMs) }
+        }
+        Reminders.sync(context, sessions)
     }
 
     /** The next Formula 1 session of the featured weekend that hasn't started, if any. */
@@ -1128,10 +1162,29 @@ class AppState(
     private fun placeMapIfNeeded(width: Float, height: Float) {
         if (mapPanel.placed) return
         mapPanel.restore(prefs.getString(PREF_MAP_PANEL, null), width, height)?.let { mapOpacity = it }
-        if (mapPanel.placed) return
+        if (mapPanel.placed) {
+            keepMapOnScreen()
+            return
+        }
         val side = minOf(width, height) * 0.42f
         mapPanel.place(Area(width - side, height - side, side, side))
         mapPanel.placed = true
+    }
+
+    /** The canvas's size in pixels, for keeping things on screen. */
+    val canvasSize get() = canvasW to canvasH
+
+    /**
+     * Pulls the track map back onto the screen, no bigger than it. Turning the phone for laptop
+     * mode swapped the screen's width and height and could leave the map, and its lock, off the
+     * right edge with no way to reach it.
+     */
+    private fun keepMapOnScreen() {
+        if (canvasW <= 0f || !mapPanel.placed) return
+        mapPanel.w = mapPanel.w.coerceAtMost(canvasW)
+        mapPanel.h = mapPanel.h.coerceAtMost(canvasH)
+        mapPanel.x = mapPanel.x.coerceIn(0f, canvasW - mapPanel.w)
+        mapPanel.y = mapPanel.y.coerceIn(0f, canvasH - mapPanel.h)
     }
 
     /** Keeps the map's place, size, turn and opacity for next time. */
@@ -1436,6 +1489,7 @@ class AppState(
         }
         canvasW = width
         canvasH = height
+        keepMapOnScreen()
         if (refit) {
             handPlaced = false
             layoutRequest++

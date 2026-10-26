@@ -255,7 +255,13 @@ private fun MapControls(app: AppState, timing: SessionTiming) {
     } ?: return
     Box(Modifier.fillMaxSize()) {
         val control = with(density) { 44.dp.toPx() }
-        fun at(x: Float, y: Float) = Modifier.offset { IntOffset((x - control / 2).roundToInt(), (y - control / 2).roundToInt()) }
+        // Each control stays on screen even if that corner of the track is off it.
+        val (screenW, screenH) = app.canvasSize
+        fun at(x: Float, y: Float) = Modifier.offset {
+            val cx = (panel.x + x).coerceIn(control / 2, (screenW - control / 2).coerceAtLeast(control / 2)) - panel.x
+            val cy = (panel.y + y).coerceIn(control / 2, (screenH - control / 2).coerceAtLeast(control / 2)) - panel.y
+            IntOffset((cx - control / 2).roundToInt(), (cy - control / 2).roundToInt())
+        }
 
         // Top-right of the track: lock, and the move grip beside it.
         MapControl(at(bounds.right, bounds.top).clickable(onClick = app::toggleMapLock)) {

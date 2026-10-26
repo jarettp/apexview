@@ -38,6 +38,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.ArrowBackIosNew
 import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.CalendarMonth
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedTextField
@@ -432,7 +433,10 @@ fun HomeScreen(app: AppState) {
         title = "Apexview",
         listState = app.homeList,
         trailing = { backdrop ->
-            GlyphButton(Icons.Rounded.Settings, "Settings", backdrop = backdrop) { app.open(Screen.Settings) }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                GlyphButton(Icons.Rounded.CalendarMonth, "Season calendar", backdrop = backdrop) { app.open(Screen.Calendar) }
+                GlyphButton(Icons.Rounded.Settings, "Settings", backdrop = backdrop) { app.open(Screen.Settings) }
+            }
         },
         hero = {
             if (featured != null) {

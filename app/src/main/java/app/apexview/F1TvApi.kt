@@ -418,7 +418,8 @@ class F1TvApi(private val userAgent: String, private val chromeMajor: String) {
         const val LANGUAGE = "ENG"
         val PLATFORMS = listOf("WEB_DASH", "TABLET_DASH", "MOBILE_DASH", "WEB_HLS")
         private val API_VERSION = Regex("""\d+\.\d+""")
-        private val SESSION_TIME = java.text.SimpleDateFormat("EEE h:mm a", java.util.Locale.getDefault())
+        // The date as well as the weekday: "Sun 2:00 PM" alone didn't say which Sunday.
+        private val SESSION_TIME = java.text.SimpleDateFormat("EEE, MMM d · h:mm a", java.util.Locale.getDefault())
 
         /** F1's image resizer, as the web app and eXViewer call it. */
         fun picture(path: String?, width: Int, height: Int): String? =

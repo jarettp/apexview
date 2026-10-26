@@ -82,49 +82,60 @@ private fun TimingTower(app: AppState, timing: SessionTiming) {
     val onTop = app.tiles.firstOrNull { it.id == app.bigTileIdForUi }?.channel?.racingNumber?.toString()
 
     Column(Modifier.fillMaxSize().padding(start = 12.dp, end = 6.dp, top = 8.dp)) {
-        Row(Modifier.height(22.dp), verticalAlignment = Alignment.CenterVertically) {
-            Header("", 26.dp)
-            Header("Driver", 58.dp, TextAlign.Start)
-            Header("Last lap", 74.dp)
-            Header(if (timing.isRace) "Leader" else "Fastest", 66.dp)
-            Header("Interval", 66.dp)
-            Header("Tyre", 52.dp)
-        }
+        TowerHeader(timing)
         LazyColumn {
             items(rows, key = { it.first }) { (number, state) ->
-                val driver = timing.drivers[number]
-                val tyre = timing.tyres[number]?.at(now)
-                val lap = state.lastLap
-                Row(
-                    Modifier
-                        .height(ROW_HEIGHT)
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(if (number == onTop) Color.White.copy(alpha = 0.1f) else Color.Transparent)
-                        .pressable(scaleTo = 0.99f) { app.showOnboard(number) },
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text("${state.position ?: ""}", style = cell.copy(color = Ink.secondary), textAlign = TextAlign.End, modifier = Modifier.width(20.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Box(Modifier.width(3.dp).height(16.dp).clip(RoundedCornerShape(2.dp)).background(driver?.color?.let { Color(it) } ?: Color.White))
-                    Spacer(Modifier.width(6.dp))
-                    Text(driver?.tla ?: number, style = cell.copy(fontWeight = FontWeight.SemiBold), modifier = Modifier.width(49.dp))
-                    Text(
-                        if (state.inPit) "PIT" else lap?.time.orEmpty(),
-                        style = cell.copy(color = lapColor(lap?.pace)),
-                        textAlign = TextAlign.End,
-                        modifier = Modifier.width(74.dp),
-                    )
-                    Text(state.toLeader.orEmpty(), style = cell.copy(color = Ink.secondary), textAlign = TextAlign.End, modifier = Modifier.width(66.dp))
-                    Text(state.ahead.orEmpty(), style = cell.copy(color = Ink.secondary), textAlign = TextAlign.End, modifier = Modifier.width(66.dp))
-                    Row(Modifier.width(52.dp), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
-                        tyre?.let {
-                            Text("${it.laps}", style = cell.copy(color = Ink.secondary, fontSize = 12.sp))
-                            Spacer(Modifier.width(5.dp))
-                            TyreMark(it.compound)
-                        }
-                    }
-                }
+                TowerRow(timing, number, state, timing.tyres[number]?.at(now), highlight = number == onTop) { app.showOnboard(number) }
+            }
+        }
+    }
+}
+
+/** The tower's column titles. */
+@Composable
+fun TowerHeader(timing: SessionTiming) {
+    Row(Modifier.height(22.dp), verticalAlignment = Alignment.CenterVertically) {
+        Header("", 26.dp)
+        Header("Driver", 58.dp, TextAlign.Start)
+        Header("Last lap", 74.dp)
+        Header(if (timing.isRace) "Leader" else "Fastest", 66.dp)
+        Header("Interval", 66.dp)
+        Header("Tyre", 52.dp)
+    }
+}
+
+/** One driver in the tower: position, team colour, code, last lap, gaps and tyre. */
+@Composable
+fun TowerRow(timing: SessionTiming, number: String, state: CardState, tyre: Tyre?, highlight: Boolean, onClick: () -> Unit) {
+    val driver = timing.drivers[number]
+    val lap = state.lastLap
+    Row(
+        Modifier
+            .height(ROW_HEIGHT)
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(6.dp))
+            .background(if (highlight) Color.White.copy(alpha = 0.1f) else Color.Transparent)
+            .pressable(scaleTo = 0.99f, onClick = onClick),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text("${state.position ?: ""}", style = cell.copy(color = Ink.secondary), textAlign = TextAlign.End, modifier = Modifier.width(20.dp))
+        Spacer(Modifier.width(6.dp))
+        Box(Modifier.width(3.dp).height(16.dp).clip(RoundedCornerShape(2.dp)).background(driver?.color?.let { Color(it) } ?: Color.White))
+        Spacer(Modifier.width(6.dp))
+        Text(driver?.tla ?: number, style = cell.copy(fontWeight = FontWeight.SemiBold), modifier = Modifier.width(49.dp))
+        Text(
+            if (state.inPit) "PIT" else lap?.time.orEmpty(),
+            style = cell.copy(color = lapColor(lap?.pace)),
+            textAlign = TextAlign.End,
+            modifier = Modifier.width(74.dp),
+        )
+        Text(state.toLeader.orEmpty(), style = cell.copy(color = Ink.secondary), textAlign = TextAlign.End, modifier = Modifier.width(66.dp))
+        Text(state.ahead.orEmpty(), style = cell.copy(color = Ink.secondary), textAlign = TextAlign.End, modifier = Modifier.width(66.dp))
+        Row(Modifier.width(52.dp), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
+            tyre?.let {
+                Text("${it.laps}", style = cell.copy(color = Ink.secondary, fontSize = 12.sp))
+                Spacer(Modifier.width(5.dp))
+                TyreMark(it.compound)
             }
         }
     }
