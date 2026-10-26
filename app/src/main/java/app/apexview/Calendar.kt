@@ -87,14 +87,20 @@ fun CalendarScreen(app: AppState) {
                     group.forEach { v -> item(key = v.contentId) { VideoRow(app, v) } }
                 }
             }
+            // In the season under way, "today" sits just before the first weekend not yet over
+            // (or after the last, once the season's done). Nothing is dimmed: finished weekends
+            // are the ones there are replays of.
+            val todayBefore = if (!current) null else weekends.firstOrNull { !it.isDone(now) }?.meetingKey ?: SEASON_OVER
             if (!classic) weekends.groupBy { MonthFormat.format(Date(it.startMs)) }.forEach { (month, inMonth) ->
                 item(key = "month-$month") {
                     Text(month, style = Type.title2, modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 28.dp, bottom = 6.dp))
                 }
                 inMonth.forEach { w ->
-                    item(key = w.meetingKey) { WeekendRow(app, w, now, focus = w == focus, dimPast = current) }
+                    if (w.meetingKey == todayBefore) item(key = "today") { TodayMarker(now) }
+                    item(key = w.meetingKey) { WeekendRow(app, w, now, focus = w == focus, thisSeason = current) }
                 }
             }
+            if (!classic && todayBefore == SEASON_OVER && weekends.isNotEmpty()) item(key = "today") { TodayMarker(now) }
             item { Spacer(Modifier.height(40.dp)) }
         }
         TopBar(
@@ -134,10 +140,7 @@ private fun RemindersSheet(app: AppState, close: () -> Unit) {
 }
 
 @Composable
-private fun WeekendRow(app: AppState, w: WeekendInfo, now: Long, focus: Boolean, dimPast: Boolean) {
-    // Finished weekends dim in the season under way; a past season is all finished, so none do.
-    val done = dimPast && w.isDone(now)
-    val fade = if (done) 0.45f else 1f
+private fun WeekendRow(app: AppState, w: WeekendInfo, now: Long, focus: Boolean, thisSeason: Boolean) {
     Column(
         Modifier
             .fillMaxWidth()
@@ -147,20 +150,20 @@ private fun WeekendRow(app: AppState, w: WeekendInfo, now: Long, focus: Boolean,
         Row {
             Text(
                 w.round?.let { "$it" } ?: "T",
-                style = Type.title2.copy(color = Ink.secondary.copy(alpha = fade)),
+                style = Type.title2.copy(color = Ink.secondary),
                 textAlign = TextAlign.End,
                 modifier = Modifier.width(40.dp),
             )
             Spacer(Modifier.width(16.dp))
             Column(Modifier.weight(1f)) {
-                Text(w.name, style = Type.headline.copy(color = Ink.primary.copy(alpha = fade)))
+                Text(w.name, style = Type.headline.copy(color = Ink.primary))
                 Text(
                     "${w.place} · ${DayFormat.format(Date(w.startMs))} – ${DayFormat.format(Date(w.endMs))}",
-                    style = Type.subhead.copy(color = Ink.secondary.copy(alpha = fade)),
+                    style = Type.subhead.copy(color = Ink.secondary),
                 )
             }
             when {
-                !dimPast -> Unit
+                !thisSeason -> Unit
                 w.isCurrent(now) -> Text("This weekend", style = Type.footnote.copy(color = LIVE_RED))
                 focus -> Text(countdown(w.startMs - now), style = Type.footnote.copy(color = Ink.primary))
             }
@@ -267,4 +270,17 @@ private fun VideoRow(app: AppState, v: CatalogItem) {
         val minutes = v.durationSec / 60
         if (minutes > 0) Text(if (minutes >= 60) "${minutes / 60}h ${minutes % 60}m" else "${minutes}m", style = Type.subhead)
     }
+}
+
+private const val SEASON_OVER = "season-over"
+private val TodayFormat = SimpleDateFormat("MMM d", Locale.getDefault())
+
+/** Where today falls in the season: a small red label in line with the weekends' names. */
+@Composable
+private fun TodayMarker(now: Long) {
+    Text(
+        "Today · ${TodayFormat.format(Date(now))}",
+        style = Type.footnote.copy(color = LIVE_RED),
+        modifier = Modifier.padding(start = 76.dp, top = 6.dp, bottom = 6.dp),
+    )
 }
