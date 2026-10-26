@@ -354,6 +354,10 @@ class AppState(
     var mapMode by mutableStateOf(prefs.getString(PREF_MAP_MODE, null)?.let { runCatching { MapMode.valueOf(it) }.getOrNull() } ?: MapMode.EDGE)
         private set
     val mapPanel = MapPanel()
+    /** The track map's window in laptop mode, below the hinge; placed and remembered on its own. */
+    val laptopMapPanel = MapPanel()
+    /** The map window on screen now. */
+    val activeMapPanel get() = if (laptopActive) laptopMapPanel else mapPanel
     var mapOpacity by mutableFloatStateOf(0.9f)
         private set
     /** Keeps the map still while the feeds under it are arranged. */
@@ -491,6 +495,31 @@ class AppState(
                     weekendContent[weekend.meetingKey] = it
                     syncReminders()
                 }
+        }
+    }
+
+    // Past seasons, for the calendar.
+
+    /** Seasons F1 TV has weekends for (2018 on) or archive videos for (1981 on), newest first. */
+    val archiveSeasons = (season downTo FIRST_ARCHIVE_SEASON).toList()
+    /** The season the calendar shows. */
+    var calendarSeason by mutableIntStateOf(season)
+        private set
+    /** Past seasons' weekends (2018 on), fetched when first shown. */
+    val pastWeekends = mutableStateMapOf<Int, List<WeekendInfo>>()
+    /** Seasons before F1 TV's weekends: their replays and other videos. */
+    val classicVideos = mutableStateMapOf<Int, List<CatalogItem>>()
+
+    fun chooseCalendarSeason(year: Int) {
+        calendarSeason = year
+        when {
+            year == season -> Unit
+            year >= FIRST_WEEKEND_SEASON && year !in pastWeekends -> scope.launch {
+                runCatching { api.calendar(year) }.onSuccess { pastWeekends[year] = it }
+            }
+            year < FIRST_WEEKEND_SEASON && year !in classicVideos -> scope.launch {
+                runCatching { api.seasonVideos(year) }.onSuccess { classicVideos[year] = it }
+            }
         }
     }
 
@@ -1108,8 +1137,9 @@ class AppState(
 
         // Laptop mode: the main feed fills the screen above the hinge; the rest wait off screen,
         // still playing. Timing and the map take the half below.
-        hinge?.takeIf { laptopActive }?.let { (top, _) ->
+        hinge?.takeIf { laptopActive }?.let { (top, bottom) ->
             val main = ordered.first()
+            placeLaptopMap(width, height, bottom)
             settle(main, Layouts.place(LayoutMode.GRID, 1, width, top).first())
             raise(main)
             // The others slide off to the side, keeping their size, and slide back later.
@@ -1177,6 +1207,25 @@ class AppState(
         mapPanel.placed = true
     }
 
+    /**
+     * The laptop map's first spot: where it was last left, else the right part of the half below
+     * the hinge, kept clear of the screen's rounded corners (the timing tower takes the left).
+     */
+    private fun placeLaptopMap(width: Float, height: Float, hingeBottom: Float) {
+        if (laptopMapPanel.placed) return
+        laptopMapPanel.restore(prefs.getString(PREF_LAPTOP_MAP, null), width, height)
+        if (laptopMapPanel.placed) {
+            keepMapOnScreen()
+            return
+        }
+        val d = context.resources.displayMetrics.density
+        val gap = 12 * d
+        val corner = 40 * d
+        val left = width * LAPTOP_TOWER_SHARE + gap
+        laptopMapPanel.place(Area(left, hingeBottom + gap, width - left - corner, height - hingeBottom - gap - corner))
+        laptopMapPanel.placed = true
+    }
+
     /** The canvas's size in pixels, for keeping things on screen. */
     val canvasSize get() = canvasW to canvasH
 
@@ -1186,17 +1235,21 @@ class AppState(
      * right edge with no way to reach it.
      */
     private fun keepMapOnScreen() {
-        if (canvasW <= 0f || !mapPanel.placed) return
-        mapPanel.w = mapPanel.w.coerceAtMost(canvasW)
-        mapPanel.h = mapPanel.h.coerceAtMost(canvasH)
-        mapPanel.x = mapPanel.x.coerceIn(0f, canvasW - mapPanel.w)
-        mapPanel.y = mapPanel.y.coerceIn(0f, canvasH - mapPanel.h)
+        if (canvasW <= 0f) return
+        for (panel in listOf(mapPanel, laptopMapPanel)) {
+            if (!panel.placed) continue
+            panel.w = panel.w.coerceAtMost(canvasW)
+            panel.h = panel.h.coerceAtMost(canvasH)
+            panel.x = panel.x.coerceIn(0f, canvasW - panel.w)
+            panel.y = panel.y.coerceIn(0f, canvasH - panel.h)
+        }
     }
 
     /** Keeps the map's place, size, turn and opacity for next time. */
     fun storeMapPanel() {
-        if (canvasW <= 0f || !mapPanel.placed) return
-        prefs.edit().putString(PREF_MAP_PANEL, mapPanel.toJson(canvasW, canvasH, mapOpacity)).apply()
+        val panel = activeMapPanel
+        if (canvasW <= 0f || !panel.placed) return
+        prefs.edit().putString(if (laptopActive) PREF_LAPTOP_MAP else PREF_MAP_PANEL, panel.toJson(canvasW, canvasH, mapOpacity)).apply()
     }
 
     fun chooseMapMode(mode: MapMode) {
@@ -1225,21 +1278,22 @@ class AppState(
     }
 
     fun rotateMap(degrees: Float) {
-        mapPanel.rotation = (mapPanel.rotation + degrees).mod(360f)
+        activeMapPanel.rotation = (activeMapPanel.rotation + degrees).mod(360f)
         storeMapPanel()
     }
 
     fun resetMapRotation() {
-        mapPanel.rotation = 0f
+        activeMapPanel.rotation = 0f
         storeMapPanel()
     }
 
     /** Two fingers on the track line while arranging: move, resize and turn the map. */
     fun arrangeMap(pan: androidx.compose.ui.geometry.Offset, zoom: Float, rotation: Float) {
-        mapPanel.x += pan.x
-        mapPanel.y += pan.y
-        if (zoom != 1f) mapPanel.scale(zoom)
-        if (rotation != 0f) mapPanel.rotation = (mapPanel.rotation + rotation).mod(360f)
+        val panel = activeMapPanel
+        panel.x += pan.x
+        panel.y += pan.y
+        if (zoom != 1f) panel.scale(zoom)
+        if (rotation != 0f) panel.rotation = (panel.rotation + rotation).mod(360f)
         showChrome()
     }
 
@@ -1881,6 +1935,9 @@ class AppState(
         private const val NUDGE = 0.1f
         const val MAX_FEEDS = 4
         private const val MAX_RECENTS = 4
+        /** F1 TV's race weekends start with 2018; before that, a season is a set of videos. */
+        const val FIRST_WEEKEND_SEASON = 2018
+        private const val FIRST_ARCHIVE_SEASON = 1981
         private const val PREF_LAPTOP = "laptopMode"
         private const val PREF_LAPTOP_ASKED = "laptopAsked"
         private const val COMPACT_DP = 600f
@@ -1901,6 +1958,9 @@ class AppState(
         private const val PREF_DEFAULT_LAYOUT = "defaultLayout"
         private const val PREF_SNAP = "snap"
         private const val PREF_MAP_PANEL = "mapPanel"
+        private const val PREF_LAPTOP_MAP = "laptopMapPanel"
+        /** How much of the width below the hinge the timing tower takes in laptop mode. */
+        const val LAPTOP_TOWER_SHARE = 0.52f
         private const val PREF_MAP_LOCKED = "mapLocked"
         private const val PREF_MAP_RESERVE = "mapReserve"
         private const val PREF_START_LINE = "startLine"

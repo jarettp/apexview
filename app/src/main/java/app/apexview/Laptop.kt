@@ -50,19 +50,19 @@ private val TYRE_COLORS = mapOf(
 private val cell = TextStyle(color = Color.White, fontSize = 13.sp, fontFeatureSettings = "tnum")
 
 /**
- * The half of the screen below the hinge in laptop mode: the timing tower on the left, the track
- * map on the right. Both follow the picture's clock, like the map and cards everywhere else.
+ * The half of the screen below the hinge in laptop mode: the timing tower on the left. The track
+ * map on the right is its own window, movable when the layout is unlocked. Both follow the
+ * picture's clock, like the map and cards everywhere else.
  */
 @Composable
 fun LaptopPanel(app: AppState, timing: SessionTiming?, modifier: Modifier) {
+    // The tower takes the left; the map is a window of its own over the right (see Viewer).
     Row(modifier.background(Ink.background)) {
-        Box(Modifier.weight(1.15f).fillMaxHeight()) {
+        Box(Modifier.weight(AppState.LAPTOP_TOWER_SHARE).fillMaxHeight()) {
             if (timing != null && timing.laps.isNotEmpty()) TimingTower(app, timing)
             else Text(app.mapStatus ?: "No timing for this session.", style = Type.footnote, modifier = Modifier.padding(20.dp))
         }
-        Box(Modifier.weight(1f).fillMaxHeight()) {
-            if (timing != null && timing.outline.size >= 8) TrackMapFill(app, timing)
-        }
+        Spacer(Modifier.weight(1f - AppState.LAPTOP_TOWER_SHARE))
     }
 }
 

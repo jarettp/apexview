@@ -274,12 +274,16 @@ fun ViewerScreen(app: AppState) {
                 exit = fadeOut(swap) + slideOutVertically(slide) { it / 2 },
             ) {
                 val top = lastHinge?.second ?: height
-                LaptopPanel(
-                    app, app.timing,
-                    Modifier
-                        .offset { IntOffset(0, top.roundToInt()) }
-                        .requiredSize(with(density) { width.toDp() }, with(density) { (height - top).coerceAtLeast(0f).toDp() }),
-                )
+                Box(Modifier.fillMaxSize()) {
+                    LaptopPanel(
+                        app, app.timing,
+                        Modifier
+                            .offset { IntOffset(0, top.roundToInt()) }
+                            .requiredSize(with(density) { width.toDp() }, with(density) { (height - top).coerceAtLeast(0f).toDp() }),
+                    )
+                    // Laptop mode's own map window: moved, resized and turned like the regular one.
+                    app.timing?.takeIf { it.outline.size >= 8 }?.let { MapPanelView(app, it) }
+                }
             }
             // The feeds' headers, above the map so its cars never cover a speaker or a menu.
             Box(Modifier.fillMaxSize().zIndex(1.5e9f)) {
@@ -346,8 +350,10 @@ fun ViewerScreen(app: AppState) {
  */
 private fun Modifier.mapGestures(app: AppState, density: androidx.compose.ui.unit.Density): Modifier {
     val timing = app.timing
-    if (!app.arranging || app.mapLocked || app.mapMode != MapMode.TRACK || timing == null) return this
-    return pointerInput(timing, app.arranging, app.mapLocked) {
+    // The track map window: the regular one in Track style, or laptop mode's own.
+    val window = app.laptopActive || app.mapMode == MapMode.TRACK
+    if (!app.arranging || app.mapLocked || !window || timing == null) return this
+    return pointerInput(timing, app.arranging, app.mapLocked, app.laptopActive) {
         val margin = mapMarginPx(density)
         val reach = with(density) { 22.dp.toPx() }
         awaitEachGesture {
@@ -993,7 +999,7 @@ private fun MapSheet(app: AppState) {
                     Row(Modifier.padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
                             Text("Turn", style = Type.headline)
-                            Text("%.0f°".format(app.mapPanel.rotation), style = Type.footnote)
+                            Text("%.0f°".format(app.activeMapPanel.rotation), style = Type.footnote)
                         }
                         listOf("↺" to -15f, "↻" to 15f).forEach { (label, step) ->
                             Text(

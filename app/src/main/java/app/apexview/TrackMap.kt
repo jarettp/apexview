@@ -207,7 +207,7 @@ private const val MARK_LABEL_DP = 15
  * the only part of the map that can be grabbed, so feeds under the rest of its box stay usable.
  */
 fun mapLineTouched(app: AppState, timing: SessionTiming, x: Float, y: Float, margin: Float, reach: Float): Boolean {
-    val panel = app.mapPanel
+    val panel = app.activeMapPanel
     if (x < panel.x - reach || y < panel.y - reach || x > panel.x + panel.w + reach || y > panel.y + panel.h + reach) return false
     val fit = MapFit.of(timing.outline, panel.w, panel.h, margin, panel.rotation) ?: return false
     return fit.nearLine(timing.outline, x - panel.x, y - panel.y, reach)
@@ -223,7 +223,7 @@ fun mapMarginPx(density: androidx.compose.ui.unit.Density) = with(density) { MAP
  */
 @Composable
 fun MapPanelView(app: AppState, timing: SessionTiming) {
-    val panel = app.mapPanel
+    val panel = app.activeMapPanel
     val density = LocalDensity.current
     Box(
         Modifier
@@ -248,7 +248,7 @@ fun TrackMapFill(app: AppState, timing: SessionTiming) {
 /** Lock, move grip and resize handle, at the corners of the drawn track. */
 @Composable
 private fun MapControls(app: AppState, timing: SessionTiming) {
-    val panel = app.mapPanel
+    val panel = app.activeMapPanel
     val density = LocalDensity.current
     val bounds = remember(timing, panel.w, panel.h, panel.rotation) {
         MapFit.of(timing.outline, panel.w, panel.h, mapMarginPx(density), panel.rotation)?.bounds(timing.outline)

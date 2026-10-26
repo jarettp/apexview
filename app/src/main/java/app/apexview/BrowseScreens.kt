@@ -434,7 +434,7 @@ fun HomeScreen(app: AppState) {
         listState = app.homeList,
         trailing = { backdrop ->
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                GlyphButton(Icons.Rounded.CalendarMonth, "Season calendar", backdrop = backdrop) { app.open(Screen.Calendar) }
+                GlyphButton(Icons.Rounded.CalendarMonth, "Calendar and past seasons", backdrop = backdrop) { app.open(Screen.Calendar) }
                 GlyphButton(Icons.Rounded.Settings, "Settings", backdrop = backdrop) { app.open(Screen.Settings) }
             }
         },

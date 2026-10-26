@@ -222,6 +222,29 @@ class F1TvApi(private val userAgent: String, private val chromeMajor: String) {
     }
 
     /**
+     * A season from before F1 TV's race weekends (pre-2018): F1 TV files these as a flat set of
+     * full race replays, highlights, reviews and documentaries. Replays first, in F1 TV's order.
+     */
+    suspend fun seasonVideos(season: Int): List<CatalogItem> = withContext(Dispatchers.IO) {
+        val seen = mutableSetOf<Long>()
+        val items = search("filter_season" to "$season", "maxResults" to "100").mapNotNull { container ->
+            val meta = container.optJSONObject("metadata") ?: return@mapNotNull null
+            val subtype = text(meta, "contentSubtype")
+            if (text(meta, "contentType") == "BUNDLE" || subtype == "MEETING" || !seen.add(meta.optLong("contentId"))) return@mapNotNull null
+            CatalogItem(
+                contentId = meta.optLong("contentId"),
+                title = text(meta, "title").trim(),
+                subtitle = subtype.lowercase().replace('_', ' ').replaceFirstChar { it.uppercase() },
+                image = text(meta, "pictureUrl").ifEmpty { null },
+                durationSec = meta.optInt("duration"),
+                live = false,
+                startMs = 0,
+            )
+        }
+        items.filter { it.subtitle == "Replay" } + items.filterNot { it.subtitle == "Replay" }
+    }
+
+    /**
      * Every item on F1 TV's weekend page: its schedule (Formula 1 events) and its rows of
      * highlights, shows and press conferences. F1 Academy and archive rows are left out.
      */

@@ -21,6 +21,9 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.material.icons.rounded.NotificationsActive
+import androidx.compose.material.icons.rounded.NotificationsNone
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
@@ -48,31 +51,48 @@ fun CalendarScreen(app: AppState) {
         derivedStateOf { if (list.firstVisibleItemIndex > 0) Float.MAX_VALUE else list.firstVisibleItemScrollOffset.toFloat() }
     }
     val span = with(density) { 50.dp.toPx() }
-    val weekends = app.weekends.sortedBy { it.startMs }
-    // The one under way, else the next to come: its sessions are listed under it.
-    val focus = weekends.firstOrNull { it.isCurrent(now) } ?: weekends.firstOrNull { it.startMs > now }
+    var remindersOpen by remember { androidx.compose.runtime.mutableStateOf(false) }
+    val year = app.calendarSeason
+    val current = year == app.season
+    val classic = year < AppState.FIRST_WEEKEND_SEASON
+    val weekends = (if (current) app.weekends.toList() else app.pastWeekends[year].orEmpty()).sortedBy { it.startMs }
+    // The one under way, else the next to come: its sessions are listed under it (this season only).
+    val focus = if (!current) null else weekends.firstOrNull { it.isCurrent(now) } ?: weekends.firstOrNull { it.startMs > now }
     LaunchedEffect(focus?.meetingKey) { focus?.let(app::loadWeekend) }
     // Opens on the weekend that matters now rather than round 1.
-    LaunchedEffect(weekends.size) {
+    LaunchedEffect(weekends.size, year) {
         val index = focus?.let { f -> weekends.indexOf(f) } ?: -1
         // Each month heading adds an item before its weekends; close enough to land near it.
-        if (index > 2) list.scrollToItem((index + index / 3).coerceAtMost(weekends.size))
+        if (index > 2) list.scrollToItem((index + index / 3).coerceAtMost(weekends.size)) else list.scrollToItem(0)
     }
 
     Box(Modifier.fillMaxSize().background(Ink.background)) {
         LazyColumn(Modifier.fillMaxSize(), state = list) {
             item {
                 Spacer(Modifier.statusBarsPadding().height(60.dp))
-                Text("${app.season} calendar", style = Type.largeTitle, modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp))
-                Reminders(app)
-                if (weekends.isEmpty()) Text("Loading the calendar…", style = Type.subhead, modifier = Modifier.padding(20.dp))
+                Text(if (classic) "$year season" else "$year calendar", style = Type.largeTitle, modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp))
+                SeasonPicker(app)
+                val empty = if (classic) app.classicVideos[year] == null else weekends.isEmpty()
+                if (empty) Text("Loading…", style = Type.subhead, modifier = Modifier.padding(20.dp))
             }
-            weekends.groupBy { MonthFormat.format(Date(it.startMs)) }.forEach { (month, inMonth) ->
+            if (classic) {
+                // Before 2018: the season's full race replays, then its highlights and shows.
+                val videos = app.classicVideos[year].orEmpty()
+                val (replays, others) = videos.partition { it.subtitle == "Replay" }
+                listOf("Full races" to replays, "Highlights, reviews and documentaries" to others).forEach { (heading, group) ->
+                    if (group.isEmpty()) return@forEach
+                    item(key = "h-$heading") {
+                        Text(heading, style = Type.title2, modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 28.dp, bottom = 6.dp))
+                    }
+                    group.forEach { v -> item(key = v.contentId) { VideoRow(app, v) } }
+                }
+            }
+            if (!classic) weekends.groupBy { MonthFormat.format(Date(it.startMs)) }.forEach { (month, inMonth) ->
                 item(key = "month-$month") {
                     Text(month, style = Type.title2, modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 28.dp, bottom = 6.dp))
                 }
                 inMonth.forEach { w ->
-                    item(key = w.meetingKey) { WeekendRow(app, w, now, focus = w == focus) }
+                    item(key = w.meetingKey) { WeekendRow(app, w, now, focus = w == focus, dimPast = current) }
                 }
             }
             item { Spacer(Modifier.height(40.dp)) }
@@ -82,13 +102,41 @@ fun CalendarScreen(app: AppState) {
             fill = { (scrolled / span).coerceIn(0f, 1f) },
             titleIn = { ((scrolled - span * 0.6f) / (span * 0.4f)).coerceIn(0f, 1f) },
             leading = { backdrop -> GlyphButton(Icons.Rounded.ArrowBackIosNew, "Back", backdrop = backdrop) { app.back() } },
+            // Reminders sit in the bar, always in reach however far the season is scrolled.
+            trailing = { backdrop ->
+                GlyphButton(
+                    if (app.remindersOn) Icons.Rounded.NotificationsActive
+                    else Icons.Rounded.NotificationsNone,
+                    "Session reminders",
+                    backdrop = backdrop,
+                ) { remindersOpen = true }
+            },
         )
+    }
+    if (remindersOpen) RemindersSheet(app) { remindersOpen = false }
+}
+
+/** The reminder switches, in a sheet from the bell. */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+private fun RemindersSheet(app: AppState, close: () -> Unit) {
+    androidx.compose.material3.ModalBottomSheet(
+        onDismissRequest = close,
+        sheetState = androidx.compose.material3.rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        containerColor = Ink.background,
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
+    ) {
+        Column(Modifier.padding(bottom = 28.dp)) {
+            Text("Session reminders", style = Type.title2, modifier = Modifier.padding(horizontal = 20.dp))
+            Reminders(app)
+        }
     }
 }
 
 @Composable
-private fun WeekendRow(app: AppState, w: WeekendInfo, now: Long, focus: Boolean) {
-    val done = w.isDone(now)
+private fun WeekendRow(app: AppState, w: WeekendInfo, now: Long, focus: Boolean, dimPast: Boolean) {
+    // Finished weekends dim in the season under way; a past season is all finished, so none do.
+    val done = dimPast && w.isDone(now)
     val fade = if (done) 0.45f else 1f
     Column(
         Modifier
@@ -112,6 +160,7 @@ private fun WeekendRow(app: AppState, w: WeekendInfo, now: Long, focus: Boolean)
                 )
             }
             when {
+                !dimPast -> Unit
                 w.isCurrent(now) -> Text("This weekend", style = Type.footnote.copy(color = LIVE_RED))
                 focus -> Text(countdown(w.startMs - now), style = Type.footnote.copy(color = Ink.primary))
             }
@@ -177,4 +226,45 @@ private fun Reminders(app: AppState) {
         style = Type.footnote,
         modifier = Modifier.padding(start = 36.dp, end = 36.dp, top = 8.dp),
     )
+}
+
+/**
+ * The seasons, newest first, as a row of years: the one shown in white, the rest grey. Seasons
+ * from 2018 have race weekends; earlier ones are F1 TV's archive of replays and highlights.
+ */
+@Composable
+private fun SeasonPicker(app: AppState) {
+    androidx.compose.foundation.lazy.LazyRow(
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 20.dp),
+        horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(18.dp),
+        modifier = Modifier.padding(top = 6.dp),
+    ) {
+        items(app.archiveSeasons.size) { i ->
+            val year = app.archiveSeasons[i]
+            val chosen = year == app.calendarSeason
+            Text(
+                "$year",
+                style = Type.headline.copy(color = if (chosen) Ink.primary else Ink.secondary),
+                modifier = Modifier.pressable { app.chooseCalendarSeason(year) }.padding(vertical = 8.dp),
+            )
+        }
+    }
+}
+
+/** A classic-season video: its title and length; tap to watch. */
+@Composable
+private fun VideoRow(app: AppState, v: CatalogItem) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .pressable(scaleTo = 0.99f) { app.openPicker(v.contentId, v.title, v.image) }
+            .padding(horizontal = 20.dp, vertical = 10.dp)
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(v.title, style = Type.headline)
+            v.subtitle?.takeIf { it != "Replay" }?.let { Text(it, style = Type.subhead) }
+        }
+        val minutes = v.durationSec / 60
+        if (minutes > 0) Text(if (minutes >= 60) "${minutes / 60}h ${minutes % 60}m" else "${minutes}m", style = Type.subhead)
+    }
 }
