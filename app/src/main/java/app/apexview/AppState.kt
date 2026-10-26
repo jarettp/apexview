@@ -568,8 +568,9 @@ class AppState(
     }.getOrDefault(emptyMap())
 
     /**
-     * Notes a few more seconds of [contentId] watched. A replay counts as finished at 90%; a live
-     * session after half an hour of it, since a live race has no end to reach yet.
+     * Notes a few more seconds of [contentId] watched. A session counts as watched once the
+     * picture is past its chequered flag, live or replay: the stream runs on well after it (the
+     * podium, interviews), and few sit through that. Anything without timing counts at 90%.
      */
     private fun noteSeen(contentId: Long, positionMs: Long, durationMs: Long, live: Boolean) {
         val now = System.currentTimeMillis()
@@ -577,9 +578,10 @@ class AppState(
         // Saves come every few seconds while watching; a longer gap was time away.
         val gap = before?.let { now - it.at }?.takeIf { it in 0..15_000 } ?: 0
         val watched = (before?.watchedMs ?: 0) + gap
-        val finished = before?.finished == true ||
-            (!live && durationMs > 0 && positionMs >= durationMs * 9 / 10) ||
-            (live && watched >= 30 * 60_000)
+        val flag = timing?.finishedUtc?.takeIf { timingContentId == contentId }
+        val pastFlag = flag != null && (mapTimeMs() ?: 0L) >= flag
+        val finished = before?.finished == true || pastFlag ||
+            (!live && durationMs > 0 && positionMs >= durationMs * 9 / 10)
         history[contentId] = Seen(now, watched, finished)
         if (history.size > MAX_HISTORY) history.entries.sortedBy { it.value.at }.take(history.size - MAX_HISTORY).forEach { history.remove(it.key) }
         val json = JSONObject()
