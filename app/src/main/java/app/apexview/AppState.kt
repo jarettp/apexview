@@ -37,6 +37,8 @@ class Tile(val id: Int, val contentId: Long, channel: Channel, feed: FeedPlayer)
     var audible by mutableStateOf(false)
     /** Pinned tiles are never replaced by a car picked on the map. */
     var pinned by mutableStateOf(false)
+    /** Showing, but its picture paused while the phone is too hot (sound and place kept). */
+    var coolingOff by mutableStateOf(false)
     /** When this tile last took a car picked on the map (or was added). Oldest goes first. */
     var mapPickedAt = System.currentTimeMillis()
 
@@ -224,6 +226,79 @@ class AppState(
 ) {
     private var api = F1TvApi(userAgent, chromeMajor)
     private val prefs = context.getSharedPreferences("f1mv", Context.MODE_PRIVATE)
+
+    // Video budget: only feeds you can see decode video, each at its tile's size, less as the phone heats up.
+
+    private val power = context.getSystemService(android.os.PowerManager::class.java)
+    /** The phone's thermal status (PowerManager.THERMAL_STATUS_*). */
+    var thermal by mutableIntStateOf(power?.currentThermalStatus ?: android.os.PowerManager.THERMAL_STATUS_NONE)
+        private set
+    private val thermalListener = android.os.PowerManager.OnThermalStatusChangedListener { status ->
+        val before = thermal
+        thermal = status
+        when {
+            status >= android.os.PowerManager.THERMAL_STATUS_CRITICAL && before < android.os.PowerManager.THERMAL_STATUS_CRITICAL ->
+                message = "The phone is very hot. Only the main feed shows video until it cools down; the others keep their sound and place."
+            status >= android.os.PowerManager.THERMAL_STATUS_SEVERE && before < android.os.PowerManager.THERMAL_STATUS_SEVERE ->
+                message = "The phone is running hot, so the feeds are at lower quality until it cools down."
+        }
+        applyVideoBudget()
+    }
+
+    init {
+        power?.addThermalStatusListener(context.mainExecutor, thermalListener)
+        // Feeds come and go, move, hide behind each other and off screen; twice a second is soon enough.
+        // Waits first: this runs while AppState is still being built, before the tiles exist.
+        scope.launch {
+            while (true) {
+                kotlinx.coroutines.delay(500)
+                applyVideoBudget()
+            }
+        }
+    }
+
+    fun close() {
+        power?.removeThermalStatusListener(thermalListener)
+    }
+
+    /**
+     * Video only for feeds that can be seen: not while browsing, not behind a full-screen feed,
+     * not tucked away in laptop mode or hidden in the pop-out, not off the canvas or entirely
+     * under another feed. Hidden ones keep playing their sound and stay in sync, so they come
+     * back at the right moment (after a moment's buffering). Each visible feed asks for the size
+     * of its tile; warm phones get less (3/4 size when hot, half when hotter), and a phone near
+     * its limit shows video in the main feed only.
+     */
+    fun applyVideoBudget() {
+        if (tiles.isEmpty()) return
+        val shown = if (inPip) pipTile() else null
+        val main = tiles.firstOrNull { it.id == bigTileId } ?: tiles.firstOrNull { it.audible } ?: tiles.maxByOrNull { it.w }
+        val scale = when {
+            thermal >= android.os.PowerManager.THERMAL_STATUS_SEVERE -> 0.5f
+            thermal >= android.os.PowerManager.THERMAL_STATUS_MODERATE -> 0.75f
+            else -> 1f
+        }
+        tiles.forEach { tile ->
+            val visible = when {
+                browsing -> false
+                inPip -> tile === shown
+                laptopActive -> tile.id == bigTileId || tiles.size == 1
+                focusTileId != null -> tile.id == focusTileId
+                else -> onCanvas(tile) && tiles.none { it !== tile && it.z > tile.z && covers(it, tile) }
+            }
+            val cooling = thermal >= android.os.PowerManager.THERMAL_STATUS_CRITICAL && tile !== main
+            tile.coolingOff = visible && cooling
+            // The pop-out is small whatever the tile's size on the canvas.
+            val (w, h) = if (inPip) 640f to 360f else tile.w to tile.h
+            tile.feed.setVideo(visible && !cooling, (w * scale).toInt(), (h * scale).toInt())
+        }
+    }
+
+    private fun onCanvas(t: Tile) =
+        canvasW <= 0f || (t.x < canvasW && t.x + t.w > 0f && t.y < canvasH && t.y + t.h > 0f)
+
+    private fun covers(a: Tile, b: Tile) =
+        a.x <= b.x && a.y <= b.y && a.x + a.w >= b.x + b.w && a.y + a.h >= b.y + b.h
     val settings = Settings(context)
     val updater = Updater(context, scope)
 

@@ -641,6 +641,14 @@ private fun TileView(app: AppState, tile: Tile) {
             }
         }
 
+        if (tile.coolingOff) {
+            Text(
+                "Video paused to let the phone cool down",
+                style = Type.subhead.copy(color = Ink.primary, shadow = overlayShadow, textAlign = androidx.compose.ui.text.style.TextAlign.Center),
+                modifier = Modifier.align(Alignment.Center).padding(horizontal = 24.dp).widthIn(max = 420.dp),
+            )
+        }
+
         tile.feed.problem?.let { problem ->
             Text(
                 problem,

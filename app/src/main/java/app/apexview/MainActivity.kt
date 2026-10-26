@@ -114,6 +114,7 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() {
         unregisterReceiver(pipControls)
         app.stopAll()
+        app.close()
         super.onDestroy()
     }
 }

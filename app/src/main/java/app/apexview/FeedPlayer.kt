@@ -161,6 +161,30 @@ class FeedPlayer(
         player.prepare()
     }
 
+    private var videoOn = true
+    private var viewW = 0
+    private var viewH = 0
+
+    /**
+     * Whether this feed's picture is wanted, and how big it's shown (px). A feed nobody can see
+     * keeps only its sound and its place in the stream: no video downloaded or decoded. One that
+     * shows gets the smallest rendition that fills its tile, rather than the screen's, which on
+     * a big screen of small tiles saves most of the bandwidth.
+     */
+    fun setVideo(on: Boolean, width: Int, height: Int) {
+        // In steps, so a tile being dragged bigger doesn't re-ask for tracks every frame.
+        val w = (width.coerceAtLeast(1) + 63) / 64 * 64
+        val h = (height.coerceAtLeast(1) + 35) / 36 * 36
+        if (on == videoOn && w == viewW && h == viewH) return
+        videoOn = on
+        viewW = w
+        viewH = h
+        player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
+            .setTrackTypeDisabled(C.TRACK_TYPE_VIDEO, !on)
+            .setViewportSize(w, h, false)
+            .build()
+    }
+
     fun setAudible(audible: Boolean) {
         player.volume = if (audible) 1f else 0f
     }
