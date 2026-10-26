@@ -18,6 +18,8 @@ Made for the Pixel Fold's inner screen, and works on other Android phones and ta
   as your default.
 - **Track map.** Every car on track, as a map you can move, turn and resize, or as a ribbon
   round the edge of the screen. Turn numbers, start and finish lines. Works on replays and live.
+- **Flags on the map:** yellow sectors, safety car and VSC, red flags, and a countdown to an
+  announced restart.
 - **Tap a car, get its onboard.** Tap a feed first to choose which one it replaces.
 - **Timing cards** on onboards: position, sectors (yellow, green, purple), running lap time,
   lap time and gap, like the broadcast's.
@@ -80,6 +82,13 @@ line, the track ribbon).
   archive (replays), with your F1 TV token. The map is lined up with the picture by the stream's
   own clock, with a nudge in the map settings for anything left over.
 - **Team radio:** the clips F1 publishes, transcribed by Android's on-device speech recogniser.
+
+## Privacy
+
+Apexview talks only to F1's servers (with your own sign-in), MultiViewer's public circuit data,
+and GitHub to check for updates. There are no analytics and nothing is uploaded in the background.
+If the app crashes, the next launch offers to open a GitHub issue with the error filled in; it's
+only sent if you submit it.
 
 ## Credits
 

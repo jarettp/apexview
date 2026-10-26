@@ -52,6 +52,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        CrashReports.install(applicationContext)
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         val userAgent = WebSettings.getDefaultUserAgent(this).replace("; wv", "")
@@ -61,7 +62,7 @@ class MainActivity : ComponentActivity() {
         }
         setContent { AppTheme { Root(app) } }
         app.restore()
-        app.updater.checkIfDue()
+        app.updater.checkOnLaunch()
         // The fold's posture: half-open with the hinge running across the screen is laptop mode.
         lifecycleScope.launch {
             repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.STARTED) {
@@ -216,6 +217,7 @@ private fun Root(app: AppState) {
         // Offered while browsing, never over a stream being watched.
         if (!app.inPip && !watching) UpdatePrompt(app.updater)
         if (!app.inPip) PlanPrompt(app)
+        if (!app.inPip && !watching) CrashPrompt(app)
     }
 }
 

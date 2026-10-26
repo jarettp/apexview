@@ -290,8 +290,17 @@ fun SettingsScreen(app: AppState) {
             }
         }
         item {
-            Group("Updates", footer = "Apexview checks for a new version once a day when it opens.") {
+            Group("Updates", footer = "Apexview checks for a new version each time it opens.") {
                 SettingRow("Check for updates", onClick = app.updater::checkNow)
+            }
+        }
+        item {
+            val context = androidx.compose.ui.platform.LocalContext.current
+            Group(
+                "Help",
+                footer = "Opens a GitHub issue with your app version and phone model filled in. Nothing is sent until you submit it.",
+            ) {
+                SettingRow("Report a problem", onClick = { CrashReports.reportProblem(context) })
             }
         }
         item {

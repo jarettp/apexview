@@ -517,6 +517,15 @@ class AppState(
      * account on REG, and Apple's streams are their own service.
      */
     val hasVideoPlan get() = tier.isNotEmpty() && tier !in NO_VIDEO_TIERS
+    /** The last crash's report, waiting for the person to send it or not. */
+    var crashReport by mutableStateOf(CrashReports.pending(context))
+        private set
+
+    fun closeCrashReport() {
+        crashReport = null
+        CrashReports.clear(context)
+    }
+
     /** Explains an account without video, once at sign-in and again if a stream is refused. */
     var planPromptOpen by mutableStateOf(false)
 

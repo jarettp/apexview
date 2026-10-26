@@ -44,8 +44,9 @@ import java.io.IOException
 class Release(val version: String, val notes: String, val apkUrl: String, val size: Long)
 
 /**
- * Keeps the app current from its GitHub releases. On launch, at most once a day, it asks GitHub
- * for the latest release of [BuildConfig.UPDATE_REPO]; if that's newer, a prompt offers it. Update
+ * Keeps the app current from its GitHub releases. Each launch it asks GitHub for the latest
+ * release of [BuildConfig.UPDATE_REPO]; if that's newer, a prompt offers it (a version put off
+ * with Not now isn't offered again for a day). Update
  * downloads the release's APK and hands it to Android's package installer, which asks the user
  * to confirm (and, the first time, to allow this app to install updates). Releases must be signed
  * with the same key as the installed app, or Android refuses them.
@@ -93,10 +94,8 @@ class Updater(private val context: Context, private val scope: CoroutineScope) {
         )
     }
 
-    /** On launch: checks if a day has passed since the last check. */
-    fun checkIfDue() {
-        val last = prefs.getLong(PREF_CHECKED, 0L)
-        if (System.currentTimeMillis() - last < CHECK_EVERY_MS) return
+    /** On launch. */
+    fun checkOnLaunch() {
         scope.launch { check(quiet = true) }
     }
 
@@ -111,7 +110,11 @@ class Updater(private val context: Context, private val scope: CoroutineScope) {
             return
         }
         prefs.edit().putLong(PREF_CHECKED, System.currentTimeMillis()).apply()
+        // Put off with Not now: not offered again on launch for a day.
+        val putOff = quiet && release?.version == prefs.getString(PREF_LATER, null) &&
+            System.currentTimeMillis() - prefs.getLong(PREF_LATER_AT, 0L) < LATER_MS
         when {
+            putOff -> Unit
             release != null && isNewer(release.version, BuildConfig.VERSION_NAME) -> offered = release
             !quiet -> note = "You're on the latest version (${BuildConfig.VERSION_NAME})."
         }
@@ -140,6 +143,7 @@ class Updater(private val context: Context, private val scope: CoroutineScope) {
     }
 
     fun dismiss() {
+        offered?.let { prefs.edit().putString(PREF_LATER, it.version).putLong(PREF_LATER_AT, System.currentTimeMillis()).apply() }
         offered = null
         note = null
     }
@@ -203,7 +207,9 @@ class Updater(private val context: Context, private val scope: CoroutineScope) {
 
     companion object {
         private const val PREF_CHECKED = "checkedAt"
-        private const val CHECK_EVERY_MS = 24 * 3_600_000L
+        private const val PREF_LATER = "laterVersion"
+        private const val PREF_LATER_AT = "laterAt"
+        private const val LATER_MS = 24 * 3_600_000L
 
         /** "0.36" > "0.35", "1.0" > "0.99", "0.35.1" > "0.35". */
         fun isNewer(candidate: String, current: String): Boolean {
