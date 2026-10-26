@@ -45,9 +45,10 @@ Tap the **?** in the viewer's top bar for a guide to every gesture.
 2. Open it on your phone and allow installing from that source when Android asks.
 3. Sign in with your F1 TV account.
 
-You need an F1 TV Pro or Premium plan bought directly from F1 TV. A free F1 TV account can't
-play video. In the US, F1 TV Premium through Apple TV isn't attached to your F1 TV account, so
-Apexview can't play it.
+You need an F1 TV plan that includes video (Pro or Premium); a free F1 TV account can't play
+anything. In the US, F1 TV Premium comes with Apple TV: link your Apple account to your F1 TV
+account on F1 TV's website or app (look for Activate), then sign in to Apexview with that F1 TV
+account.
 
 Android 10 or newer.
 

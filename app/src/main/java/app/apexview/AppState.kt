@@ -513,8 +513,8 @@ class AppState(
 
     /**
      * Whether the signed-in account's F1 TV plan includes video. A free account (REG) signs in
-     * fine but gets nothing to play. In the US, Premium bought through Apple TV leaves the F1 TV
-     * account on REG, and Apple's streams are their own service.
+     * fine but gets nothing to play. In the US, Premium comes with Apple TV and reaches the F1 TV
+     * account once the Apple account is linked to it; until then it's REG.
      */
     val hasVideoPlan get() = tier.isNotEmpty() && tier !in NO_VIDEO_TIERS
     /** The last crash's report, waiting for the person to send it or not. */

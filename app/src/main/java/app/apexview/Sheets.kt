@@ -322,7 +322,8 @@ fun SettingsScreen(app: AppState) {
 
 /**
  * Shown when the account signed in has no F1 TV plan with video, so nothing would play. Says
- * why, including the Apple TV case in the US, and offers to sign in with another account.
+ * why, and how US viewers with Apple TV get Premium onto their F1 TV account: by linking their
+ * Apple account to it on F1 TV. Offers F1 TV's site, or signing in with another account.
  */
 @Composable
 fun PlanPrompt(app: AppState) {
@@ -335,14 +336,15 @@ fun PlanPrompt(app: AppState) {
                 .background(Ink.surface)
                 .padding(24.dp)
         ) {
-            Text("This account can't play video", style = Type.title2)
+            val context = androidx.compose.ui.platform.LocalContext.current
+            Text("This account can't play video yet", style = Type.title2)
             Text(
                 "You're signed in, but this F1 TV account doesn't have a plan that includes video, so F1 won't stream anything to it.",
                 style = Type.subhead,
                 modifier = Modifier.padding(top = 8.dp),
             )
             Text(
-                "In the US, F1 TV Premium through Apple TV isn't attached to your F1 TV account, and Apexview can't use Apple's streams. Apexview needs a Pro or Premium plan bought directly from F1 TV.",
+                "Get F1 TV Premium with Apple TV in the US? Link your Apple account to this F1 TV account on F1 TV's website or app (look for Activate). Once your F1 account shows Premium, reopen Apexview.",
                 style = Type.subhead,
                 modifier = Modifier.padding(top = 10.dp),
             )
@@ -350,9 +352,19 @@ fun PlanPrompt(app: AppState) {
                 Modifier.fillMaxWidth().padding(top = 20.dp),
                 horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.End),
             ) {
-                SecondaryButton("Use another account") { app.closePlanPrompt(true) }
+                SecondaryButton("Open F1 TV") {
+                    context.startActivity(
+                        android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse("https://f1tv.formula1.com"))
+                            .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                    )
+                }
                 PrimaryButton("OK") { app.closePlanPrompt(false) }
             }
+            Text(
+                "Use another account",
+                style = Type.subhead,
+                modifier = Modifier.align(Alignment.End).pressable { app.closePlanPrompt(true) }.padding(top = 14.dp),
+            )
         }
     }
 }
