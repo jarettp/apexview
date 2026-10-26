@@ -27,7 +27,13 @@ Made for the Pixel Fold's inner screen, and works on other Android phones and ta
 - **Pick up where you left off** across your last four sessions, layout included.
 - **Pop-out** picture-in-picture when you leave the app.
 - **Foldable aware:** re-lays out on fold and unfold; on the cover screen, double-tap a feed to
-  fill the screen.
+  fill the screen. Laptop mode: half-open with the hinge across, the stream goes up top and a
+  timing tower and the track map fill the bottom.
+- **What to watch next** on home: what's live, what follows a session you watched (post-race
+  show, press conference, highlights), the build-up before a weekend, and last year's race there.
+- **All of F1 TV's catalog:** shows, documentaries, press conferences and full races from every
+  season back to 1981.
+- **Season calendar** in your local time, with optional reminders before each session.
 
 Tap the **?** in the viewer's top bar for a guide to every gesture.
 
