@@ -290,7 +290,7 @@ fun SettingsScreen(app: AppState) {
             }
         }
         item {
-            Group("Updates", footer = "Apexview checks for a new version each time it opens.") {
+            Group("Updates", footer = "Apexview Fork checks for a new version each time it opens.") {
                 SettingRow("Check for updates", onClick = app.updater::checkNow)
             }
         }
@@ -305,7 +305,7 @@ fun SettingsScreen(app: AppState) {
         }
         item {
             Text(
-                "Apexview ${BuildConfig.VERSION_NAME} · built ${BuildConfig.BUILT_AT}",
+                "Apexview Fork ${BuildConfig.VERSION_NAME} · built ${BuildConfig.BUILT_AT}",
                 style = Type.caption,
                 modifier = Modifier.padding(start = 36.dp, top = 28.dp, bottom = 40.dp),
             )

@@ -51,7 +51,7 @@ object CrashReports {
     }
 
     /** The app and the phone: nothing about the person or what they watched. */
-    fun about() = "Apexview ${BuildConfig.VERSION_NAME} · ${Build.MANUFACTURER} ${Build.MODEL} · Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})"
+    fun about() = "Apexview Fork ${BuildConfig.VERSION_NAME} · ${Build.MANUFACTURER} ${Build.MODEL} · Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})"
 
     /** Sign-in tokens and the signed parts of stream addresses never go into a report. */
     private fun scrub(text: String) = text

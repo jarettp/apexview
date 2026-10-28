@@ -423,7 +423,7 @@ fun SignInScreen(app: AppState) {
             Modifier.align(Alignment.BottomStart).navigationBarsPadding().padding(SidePadding).widthIn(max = 480.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Text("Apexview", style = Type.largeTitle)
+            Text("Apexview Fork", style = Type.largeTitle)
             Text("Every feed of every session, arranged the way you want. Sign in with your F1 TV account.", style = Type.subhead)
             Spacer(Modifier.height(8.dp))
             PrimaryButton("Sign in", modifier = Modifier.fillMaxWidth(), enabled = !app.busy, onClick = app::startLogin)
@@ -485,7 +485,7 @@ fun HomeScreen(app: AppState) {
     ArtPage(
         image = null,
         artKey = null,
-        title = "Apexview",
+        title = "Apexview Fork",
         listState = app.homeList,
         trailing = { backdrop ->
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
