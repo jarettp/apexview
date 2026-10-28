@@ -46,6 +46,10 @@ That is it. To try the new features:
   go back to the normal layout.
 - **Scrollable settings sheets:** the Layout and Map sheets now scroll,
   so their lower controls are reachable on a short screen.
+- **Track map that stays put:** the map panel can no longer be dragged
+  off-screen, and if a saved position ever is off-screen it is put back
+  to its default bottom-right spot on the next layout. If it ever does
+  go missing, Map settings has a **Reset** under Position.
 
 ## Updating later
 

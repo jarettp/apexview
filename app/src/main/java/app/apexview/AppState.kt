@@ -100,6 +100,30 @@ class MapPanel {
         h = area.h
     }
 
+    /** The default spot: a square in the bottom-right corner, over the feeds. */
+    fun placeDefault(width: Float, height: Float) {
+        val side = minOf(width, height) * 0.42f
+        place(Area(width - side, height - side, side, side))
+        placed = true
+    }
+
+    /** True when no part of the panel is on a canvas of this size. */
+    fun isOffScreen(width: Float, height: Float) =
+        w <= 0f || h <= 0f || x >= width || y >= height || x + w <= 0f || y + h <= 0f
+
+    /**
+     * Rebuilt placement rule: a panel can never live off-screen. Shrink it to
+     * the canvas if it grew too big, then pull its top-left back inside.
+     * This is what stops a bad drag from hiding the map for good.
+     */
+    fun clampTo(width: Float, height: Float) {
+        if (width <= 0f || height <= 0f) return
+        w = w.coerceIn(MIN_SIZE, width)
+        h = h.coerceIn(MIN_SIZE, height)
+        x = x.coerceIn(0f, width - w)
+        y = y.coerceIn(0f, height - h)
+    }
+
     fun scale(factor: Float) {
         val cx = x + w / 2
         val cy = y + h / 2
@@ -1397,6 +1421,10 @@ class AppState(
     }
 
     private fun layOut(width: Float, height: Float) {
+        // Rebuilt placement: recover a lost map before any feed layout
+        // can depend on where it was. Gap placement below may still
+        // move it into a valid gap afterwards.
+        ensureMapVisible()
         val ordered = bigFirst()
         bigTileId = ordered.firstOrNull()?.id
 
@@ -1464,12 +1492,13 @@ class AppState(
         if (mapPanel.placed) return
         mapPanel.restore(prefs.getString(PREF_MAP_PANEL, null), width, height)?.let { mapOpacity = it }
         if (mapPanel.placed) {
-            keepMapOnScreen()
+            // A restored panel that is fully off-screen is recovered,
+            // not kept: that is the old bug, in this exact spot.
+            if (mapPanel.isOffScreen(width, height)) mapPanel.placeDefault(width, height)
+            else mapPanel.clampTo(width, height)
             return
         }
-        val side = minOf(width, height) * 0.42f
-        mapPanel.place(Area(width - side, height - side, side, side))
-        mapPanel.placed = true
+        mapPanel.placeDefault(width, height)
     }
 
     /**
@@ -1503,17 +1532,45 @@ class AppState(
         if (canvasW <= 0f) return
         for (panel in listOf(mapPanel, laptopMapPanel)) {
             if (!panel.placed) continue
-            panel.w = panel.w.coerceAtMost(canvasW)
-            panel.h = panel.h.coerceAtMost(canvasH)
-            panel.x = panel.x.coerceIn(0f, canvasW - panel.w)
-            panel.y = panel.y.coerceIn(0f, canvasH - panel.h)
+            panel.clampTo(canvasW, canvasH)
         }
+    }
+
+    /**
+     * The rebuilt guarantee, run before every layout: the regular map is
+     * either placed, on-screen, or put back to its default spot. A panel
+     * saved off-screen (a bad drag, a different screen size) is recovered
+     * here, once, instead of staying lost until the user resets it.
+     */
+    fun ensureMapVisible() {
+        if (canvasW <= 0f || canvasH <= 0f) return
+        if (!mapPanel.placed) {
+            placeMapIfNeeded(canvasW, canvasH)
+            return
+        }
+        if (mapPanel.isOffScreen(canvasW, canvasH)) {
+            mapPanel.placeDefault(canvasW, canvasH)
+            storeMapPanel()
+        } else {
+            mapPanel.clampTo(canvasW, canvasH)
+        }
+        laptopMapPanel.takeIf { it.placed }?.clampTo(canvasW, canvasH)
+    }
+
+    /** Puts the regular map back to its default bottom-right spot, on purpose. */
+    fun resetMapPosition() {
+        if (canvasW <= 0f || canvasH <= 0f) return
+        mapPanel.placeDefault(canvasW, canvasH)
+        storeMapPanel()
+        layoutRequest++
     }
 
     /** Keeps the map's place, size, turn and opacity for next time. */
     fun storeMapPanel() {
         val panel = activeMapPanel
         if (canvasW <= 0f || !panel.placed) return
+        // Never persist an off-screen position: clamp first, then save.
+        panel.clampTo(canvasW, canvasH)
         prefs.edit().putString(if (laptopActive) PREF_LAPTOP_MAP else PREF_MAP_PANEL, panel.toJson(canvasW, canvasH, mapOpacity)).apply()
     }
 
@@ -1559,6 +1616,10 @@ class AppState(
         panel.y += pan.y
         if (zoom != 1f) panel.scale(zoom)
         if (rotation != 0f) panel.rotation = (panel.rotation + rotation).mod(360f)
+        // Rebuilt touch rule: a drag can never push the panel off-screen.
+        // Clamping here, during the drag, is what stops "it went away
+        // when I touched it" — not a rescue afterwards.
+        if (canvasW > 0f && canvasH > 0f) panel.clampTo(canvasW, canvasH)
         showChrome()
     }
 

@@ -1059,6 +1059,17 @@ private fun MapSheet(app: AppState) {
                         SwitchRow("Lock the map in place", app.mapLocked) { app.toggleMapLock() }
                         SwitchRow("Keep feeds clear of the map", app.mapReserve, app::chooseMapReserve)
                     }
+                    Row(Modifier.padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text("Position", style = Type.headline)
+                            Text("Bottom-right, at its default size.", style = Type.footnote)
+                        }
+                        Text(
+                            "Reset",
+                            style = Type.headline,
+                            modifier = Modifier.pressable(onClick = app::resetMapPosition).padding(horizontal = 14.dp, vertical = 10.dp),
+                        )
+                    }
                     Text(
                         "Locked, the map stays put while you arrange the feeds under it. Kept clear, the feeds make room for it instead of lying under it.",
                         style = Type.footnote,
