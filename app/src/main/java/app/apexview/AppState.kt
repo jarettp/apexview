@@ -1839,6 +1839,8 @@ class AppState(
         }
         canvasW = width
         canvasH = height
+        // A forced hinge follows the canvas, so rotating keeps the split in the middle.
+        refreshHinge()
         keepMapOnScreen()
         if (!refit) {
             keepOnScreen(width, height)
@@ -1921,20 +1923,43 @@ class AppState(
     /** Laptop mode is wanted when the phone is in that position. Off until asked. */
     var laptopEnabled by mutableStateOf(prefs.getBoolean(PREF_LAPTOP, false))
         private set
+    /**
+     * Forced laptop mode: split the screen in half even when the phone reports no
+     * half-open hinge (some foldables, including the Z Fold 8, don't surface one
+     * the app can see). The virtual hinge sits at the middle of the canvas.
+     */
+    var laptopForced by mutableStateOf(prefs.getBoolean(PREF_LAPTOP_FORCED, false))
+        private set
+    /** The hinge the activity last reported, if any; kept apart from the virtual one. */
+    private var realHinge: Pair<Float, Float>? = null
     /** The one-time question, showing. */
     var laptopPromptOpen by mutableStateOf(false)
         private set
 
     /** Laptop mode is on screen now. */
-    val laptopActive get() = laptopEnabled && hinge != null && tiles.isNotEmpty()
+    val laptopActive get() = (laptopEnabled || laptopForced) && hinge != null && tiles.isNotEmpty()
+
+    /** Recomputes the effective hinge from the real one, or a virtual mid-screen one. */
+    private fun refreshHinge() {
+        val was = laptopActive
+        hinge = realHinge ?: if (laptopForced && canvasH > 0f) (canvasH / 2f to canvasH / 2f) else null
+        if (laptopActive != was) relayoutGliding()
+    }
 
     /** From the activity: the fold's posture changed. */
     fun updatePosture(newHinge: Pair<Float, Float>?) {
-        val was = laptopActive
-        hinge = newHinge
+        realHinge = newHinge
         // The first time the phone is held like a laptop while watching, ask.
+        // A forced (virtual) hinge never prompts: the user already chose it.
         if (newHinge != null && tiles.isNotEmpty() && !prefs.getBoolean(PREF_LAPTOP_ASKED, false)) laptopPromptOpen = true
-        if (laptopActive != was) relayoutGliding()
+        refreshHinge()
+    }
+
+    /** Turns forced laptop mode on or off; on also works without laptopEnabled set. */
+    fun chooseLaptopForced(on: Boolean) {
+        laptopForced = on
+        prefs.edit().putBoolean(PREF_LAPTOP_FORCED, on).apply()
+        refreshHinge()
     }
 
     fun answerLaptopPrompt(use: Boolean) {
@@ -2213,6 +2238,7 @@ class AppState(
         private const val FIRST_ARCHIVE_SEASON = 1981
         private const val PREF_LAPTOP = "laptopMode"
         private const val PREF_LAPTOP_ASKED = "laptopAsked"
+        private const val PREF_LAPTOP_FORCED = "laptopForced"
         private const val COMPACT_DP = 600f
         private const val PREF_RADIO = "radioOpen"
         private const val PREF_HELP_SEEN = "helpSeen"

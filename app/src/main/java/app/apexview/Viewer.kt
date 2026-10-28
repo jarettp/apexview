@@ -941,9 +941,15 @@ private fun LayoutSheet(app: AppState) {
 
             Column(Modifier.padding(top = 20.dp).clip(RoundedCornerShape(12.dp)).background(Ink.background).padding(vertical = 4.dp)) {
                 SwitchRow("Laptop mode when half-folded", app.laptopEnabled, app::chooseLaptop)
+                SwitchRow("Force laptop mode", app.laptopForced, app::chooseLaptopForced)
             }
             Text(
                 "Open the phone partway, like a laptop, and the stream takes the top half while the timing tower and track map fill the bottom.",
+                style = Type.footnote,
+                modifier = Modifier.padding(top = 8.dp),
+            )
+            Text(
+                "Force laptop mode splits the screen in half even if your phone doesn't report a half-open hinge. Turn it off to go back to the normal layout.",
                 style = Type.footnote,
                 modifier = Modifier.padding(top = 8.dp),
             )
