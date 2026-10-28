@@ -1567,11 +1567,27 @@ class AppState(
         laptopMapPanel.takeIf { it.placed }?.clampTo(canvasW, canvasH)
     }
 
-    /** Puts the regular map back to its default bottom-right spot, on purpose. */
+    /**
+     * Puts the map back to its default bottom-right spot, on purpose.
+     * Resets BOTH panels, not just the regular one: the sheet's Reset
+     * previously only moved mapPanel, while the panel actually on
+     * screen in laptop mode is laptopMapPanel — so in laptop mode
+     * Reset looked like a no-op, and a saved laptop position survived
+     * it. Clearing the laptop panel's saved spot makes the next
+     * laptop layout re-place it below the hinge from scratch.
+     * The on-screen message confirms the tap registered, with the
+     * panel and canvas sizes, so a screenshot of it settles whether
+     * the canvas itself is the wrong size.
+     */
     fun resetMapPosition() {
         if (canvasW <= 0f || canvasH <= 0f) return
         mapPanel.placeDefault(canvasW, canvasH)
-        storeMapPanel()
+        laptopMapPanel.placed = false
+        prefs.edit()
+            .putString(PREF_MAP_PANEL, mapPanel.toJson(canvasW, canvasH, mapOpacity))
+            .remove(PREF_LAPTOP_MAP)
+            .apply()
+        message = "Map reset: panel ${mapPanel.w.toInt()}×${mapPanel.h.toInt()} at ${mapPanel.x.toInt()},${mapPanel.y.toInt()} on ${canvasW.toInt()}×${canvasH.toInt()} canvas."
         layoutRequest++
     }
 
