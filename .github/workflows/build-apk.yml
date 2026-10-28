@@ -23,7 +23,9 @@ jobs:
         with:
           distribution: temurin
           java-version: 17
-      - uses: android-actions/setup-android@v3
+      # No setup-android step on purpose: ubuntu-latest runners already
+      # ship the Android SDK, and setup-android@v3 fails on them trying
+      # to install the obsolete 'tools' package via sdkmanager.
       # Keep the same debug signing key across runs, so a new build
       # installs over the old one instead of asking for an uninstall.
       # This is only the throwaway debug key, not a release key.
