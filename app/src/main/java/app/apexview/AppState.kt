@@ -1489,7 +1489,17 @@ class AppState(
      * bottom-right corner, over the feeds.
      */
     private fun placeMapIfNeeded(width: Float, height: Float) {
-        if (mapPanel.placed) return
+        if (mapPanel.placed) {
+            // A placed panel is NOT trusted blindly: a panel saved on a
+            // different screen ratio (or dragged off the right edge before
+            // clamping existed) can be mostly off-screen, and its track
+            // line and move grip then can't be reached to drag it back.
+            // Clamp it here, on every mode change and layout, so it can
+            // never stay in that un-grabbable state.
+            if (mapPanel.isOffScreen(width, height)) mapPanel.placeDefault(width, height)
+            else mapPanel.clampTo(width, height)
+            return
+        }
         mapPanel.restore(prefs.getString(PREF_MAP_PANEL, null), width, height)?.let { mapOpacity = it }
         if (mapPanel.placed) {
             // A restored panel that is fully off-screen is recovered,

@@ -51,6 +51,18 @@ class MapPanelTest {
     }
 
     @Test
+    fun partiallyOffRightPanelIsPulledBackOnScreen() {
+        // The Fold 8 case: a panel saved on a wider ratio, only a sliver
+        // showing at the right edge, must come back whole, not stay
+        // un-grabbable. Clamping is what placeMapIfNeeded now does for
+        // an already-placed panel on every mode change and layout.
+        val p = panel(1800f, 100f, 1200f, 800f)
+        p.clampTo(2000f, 1800f)
+        assertEquals(800f, p.x, 0.001f)
+        assertEquals(2000f, p.x + p.w, 0.001f)
+    }
+
+    @Test
     fun fullyOffScreenPanelIsRecognisedAsLost() {
         assertTrue(panel(2000f, 0f, 800f, 800f).isOffScreen(2000f, 1800f))
         assertTrue(panel(0f, 1800f, 800f, 800f).isOffScreen(2000f, 1800f))
