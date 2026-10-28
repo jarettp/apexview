@@ -28,7 +28,7 @@ android {
         val builtAt = LocalDateTime.now().format(DateTimeFormatter.ofPattern("MMM d, HH:mm"))
         buildConfigField("String", "BUILT_AT", "\"$builtAt\"")
         // Where updates come from (owner/repo on GitHub). A fork points this at its own releases.
-        buildConfigField("String", "UPDATE_REPO", "\"mikeyyy0/apexview\"")
+        buildConfigField("String", "UPDATE_REPO", "\"jarettp/apexview\"")
     }
 
     signingConfigs {

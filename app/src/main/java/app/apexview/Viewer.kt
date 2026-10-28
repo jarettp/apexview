@@ -293,7 +293,7 @@ fun ViewerScreen(app: AppState) {
             app.timing?.let { timing ->
                 AnimatedVisibility(!laptop, Modifier.fillMaxSize().zIndex(1e9f), enter = fadeIn(swap), exit = fadeOut(swap)) {
                     when (app.mapMode) {
-                        MapMode.TRACK -> Box(Modifier.fillMaxSize()) { MapPanelView(app, timing) }
+                        MapMode.TRACK -> MapPanelView(app, timing)
                         MapMode.EDGE -> Box(Modifier.fillMaxSize()) {
                             EdgeMap(app, timing, width, height, edgeInset, cornerRadius)
                         }
@@ -918,7 +918,7 @@ private fun LayoutSheet(app: AppState) {
         shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
     ) {
         KeepSystemBarsHidden()
-        Column(Modifier.navigationBarsPadding().padding(horizontal = 20.dp).padding(bottom = 24.dp)) {
+        Column(Modifier.verticalScroll(rememberScrollState()).navigationBarsPadding().padding(horizontal = 20.dp).padding(bottom = 24.dp)) {
             Text("Layout", style = Type.title2)
             val n = app.tiles.size
             val hasSaved = app.savedLayout(n) != null
@@ -971,7 +971,7 @@ private fun MapSheet(app: AppState) {
         shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
     ) {
         KeepSystemBarsHidden()
-        Column(Modifier.navigationBarsPadding().padding(horizontal = 20.dp).padding(bottom = 24.dp)) {
+        Column(Modifier.verticalScroll(rememberScrollState()).navigationBarsPadding().padding(horizontal = 20.dp).padding(bottom = 24.dp)) {
             Text("Track map", style = Type.title2)
             app.mapStatus?.let { Text(it, style = Type.footnote, modifier = Modifier.padding(top = 4.dp)) }
 
