@@ -1,0 +1,40 @@
+name: Build APK
+
+# Builds this fork's debug APK on every push to main, so installing it
+# never needs Android Studio: download the APK from the Actions tab
+# (or from the run linked in INSTALL.md) and open it on the phone.
+# Debug builds are signed automatically by Gradle and install like a
+# normal app. They use the fork's own app ID (app.apexview.fork), so
+# they sit alongside the original Apexview instead of replacing it.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: android-actions/setup-android@v3
+      # Keep the same debug signing key across runs, so a new build
+      # installs over the old one instead of asking for an uninstall.
+      # This is only the throwaway debug key, not a release key.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: debug-keystore-v1
+      - uses: gradle/actions/setup-gradle@v3
+      - run: chmod +x gradlew
+      - run: ./gradlew testDebugUnitTest assembleDebug --no-daemon
+      - uses: actions/upload-artifact@v4
+        with:
+          name: apexview-fork-debug
+          path: app/build/outputs/apk/debug/*.apk
